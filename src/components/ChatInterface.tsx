@@ -86,7 +86,6 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let accumulated = "";
-        let rawChunks = "";
 
         if (reader) {
           while (true) {
@@ -94,25 +93,30 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
-            rawChunks += chunk;
             // Parse SSE data lines
             for (const line of chunk.split("\n")) {
               if (line.startsWith("data: ")) {
                 const data = line.slice(6).trim();
                 if (data === "[DONE]") continue;
                 try {
-                  const parsed = JSON.parse(data) as { type?: string; textDelta?: string; text?: string; response?: string };
-                  if (parsed.type === "text-delta" && parsed.textDelta) {
+                  const parsed = JSON.parse(data) as {
+                    type?: string;
+                    textDelta?: string;
+                    text?: string;
+                    response?: string;
+                    // OpenAI-compatible (Cloudflare Workers AI)
+                    choices?: Array<{ delta?: { content?: string } }>;
+                  };
+                  if (parsed.choices?.[0]?.delta?.content) {
+                    accumulated += parsed.choices[0].delta.content;
+                  } else if (parsed.type === "text-delta" && parsed.textDelta) {
                     accumulated += parsed.textDelta;
                   } else if (parsed.response) {
                     accumulated += parsed.response;
                   } else if (parsed.text) {
                     accumulated += parsed.text;
-                  } else {
-                    console.warn("[ChatInterface] Unrecognised SSE shape:", data.slice(0, 200));
                   }
                 } catch {
-                  // Not JSON — might be plain text chunk
                   if (data && data !== "[DONE]") accumulated += data;
                 }
               }
@@ -128,17 +132,10 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
           }
         }
 
-        console.log("[ChatInterface] Stream complete. accumulated length:", accumulated.length, "raw bytes:", rawChunks.length);
-        if (accumulated.length === 0 && rawChunks.length > 0) {
-          console.warn("[ChatInterface] Raw SSE (first 500 chars):", rawChunks.slice(0, 500));
-        }
-
-        // Finalize the message — if nothing accumulated, show raw for debugging
-        const finalContent = accumulated || `[DEBUG: empty response. Raw: ${rawChunks.slice(0, 300)}]`;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: finalContent, isStreaming: false }
+              ? { ...m, content: accumulated, isStreaming: false }
               : m
           )
         );
