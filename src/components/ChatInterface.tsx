@@ -76,11 +76,17 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
           }),
         });
 
-        if (!response.ok) throw new Error("Agent request failed");
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => "(unreadable)");
+          const errMsg = `HTTP ${response.status} ${response.statusText}: ${errorBody.slice(0, 300)}`;
+          console.error("[ChatInterface] Agent error:", errMsg);
+          throw new Error(errMsg);
+        }
 
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let accumulated = "";
+        let rawChunks = "";
 
         if (reader) {
           while (true) {
@@ -88,6 +94,7 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
+            rawChunks += chunk;
             // Parse SSE data lines
             for (const line of chunk.split("\n")) {
               if (line.startsWith("data: ")) {
@@ -101,6 +108,8 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
                     accumulated += parsed.response;
                   } else if (parsed.text) {
                     accumulated += parsed.text;
+                  } else {
+                    console.warn("[ChatInterface] Unrecognised SSE shape:", data.slice(0, 200));
                   }
                 } catch {
                   // Not JSON — might be plain text chunk
@@ -119,11 +128,17 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
           }
         }
 
-        // Finalize the message
+        console.log("[ChatInterface] Stream complete. accumulated length:", accumulated.length, "raw bytes:", rawChunks.length);
+        if (accumulated.length === 0 && rawChunks.length > 0) {
+          console.warn("[ChatInterface] Raw SSE (first 500 chars):", rawChunks.slice(0, 500));
+        }
+
+        // Finalize the message — if nothing accumulated, show raw for debugging
+        const finalContent = accumulated || `[DEBUG: empty response. Raw: ${rawChunks.slice(0, 300)}]`;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: accumulated, isStreaming: false }
+              ? { ...m, content: finalContent, isStreaming: false }
               : m
           )
         );
@@ -132,13 +147,14 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
         const parsed = parseBriefFromContent(accumulated);
         if (parsed) setBrief(parsed);
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error("[ChatInterface] Caught error:", errMsg);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
               ? {
                   ...m,
-                  content:
-                    "Sorry, I encountered an error. Please try again.",
+                  content: `Error: ${errMsg}`,
                   isStreaming: false,
                 }
               : m
