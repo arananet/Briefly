@@ -65,7 +65,7 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
       setIsLoading(true);
 
       try {
-        const response = await fetch(`/agents/briefly/${agentId}`, {
+        const response = await fetch(`/agents/briefly-agent/${agentId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
