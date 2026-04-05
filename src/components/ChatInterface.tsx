@@ -179,7 +179,7 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
       <div className="chat-container">
         {/* Header */}
         <div className="chat-header">
-          <span className="chat-title">Innovation Director · Llama 3.3</span>
+          <span className="chat-title">Innovation Director · Gemma 4</span>
           {brief && (
             <button
               className="btn btn-primary"

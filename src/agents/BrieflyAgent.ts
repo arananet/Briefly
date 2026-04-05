@@ -168,7 +168,7 @@ export class BrieflyAgent extends Agent<Env, BrieflyState> {
     let aiStream: ReadableStream;
     try {
       aiStream = (await this.env.AI.run(
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+        "@cf/google/gemma-4-26b-a4b-it" as Parameters<Ai["run"]>[0],
         { messages, stream: true } as Parameters<Ai["run"]>[1]
       )) as ReadableStream;
     } catch (e) {
@@ -203,7 +203,7 @@ export class BrieflyAgent extends Agent<Env, BrieflyState> {
     let aiSummary = "";
     try {
       const result = await this.env.AI.run(
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+        "@cf/google/gemma-4-26b-a4b-it" as Parameters<Ai["run"]>[0],
         {
           messages: [
             { role: "system" as const, content: "You are an innovation director. Be concise." },
