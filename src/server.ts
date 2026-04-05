@@ -14,6 +14,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { routeAgentRequest } from "agents";
 import type { Env } from "./types";
 import { buildAgentCard } from "./a2a/agentCard";
 import { a2aRouter } from "./a2a/handler";
@@ -176,18 +177,13 @@ app.post("/api/scrape", async (c) => {
   }
 });
 
-// ── BrieflyAgent WebSocket + HTTP ─────────────────────────────────────────
-app.all("/agents/briefly/:id", (c) => {
-  const id = c.env.BRIEFLY_AGENT.idFromName(c.req.param("id"));
-  const stub = c.env.BRIEFLY_AGENT.get(id);
-  return stub.fetch(c.req.raw);
-});
-
-// ── ScraperAgent HTTP ──────────────────────────────────────────────────────
-app.all("/agents/scraper/:id", (c) => {
-  const id = c.env.SCRAPER_AGENT.idFromName(c.req.param("id"));
-  const stub = c.env.SCRAPER_AGENT.get(id);
-  return stub.fetch(c.req.raw);
+// ── Agent routing (BrieflyAgent, ScraperAgent) ────────────────────────────
+// routeAgentRequest adds the namespace/room headers the agents SDK requires.
+app.all("/agents/*", async (c) => {
+  return (
+    (await routeAgentRequest(c.req.raw, c.env)) ??
+    new Response("Agent not found", { status: 404 })
+  );
 });
 
 // ── SPA Fallback: serve React app for all other routes ────────────────────
