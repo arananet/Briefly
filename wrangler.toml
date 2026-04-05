@@ -7,9 +7,6 @@ account_id = "693ae9c587f1f2c34328bb47447366b0"
 [ai]
 binding = "AI"
 
-[browser]
-binding = "BROWSER"
-
 [durable_objects]
 bindings = [
   { name = "BRIEFLY_AGENT", class_name = "BrieflyAgent" },

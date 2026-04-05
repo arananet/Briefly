@@ -26,7 +26,6 @@ export interface ScrapedItem {
 
 export interface Env {
   AI: Ai;
-  BROWSER: any; // BrowserWorker — typed as any to avoid strict DO binding issues
   BRIEFLY_AGENT: DurableObjectNamespace;
   SCRAPER_AGENT: DurableObjectNamespace;
   MCP_AGENT: DurableObjectNamespace;
