@@ -164,17 +164,23 @@ export class BrieflyAgent extends Agent<Env, BrieflyState> {
       })),
     ];
 
-    // Stream from Gemma 4
-    const aiStream = await this.env.AI.run(
-      "@cf/google/gemma-4-26b-a4b-it" as Parameters<Ai["run"]>[0],
-      {
-        messages,
-        stream: true,
-      } as Parameters<Ai["run"]>[1]
-    );
+    // Stream from Llama 3.3 70B
+    let aiStream: ReadableStream;
+    try {
+      aiStream = (await this.env.AI.run(
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+        { messages, stream: true } as Parameters<Ai["run"]>[1]
+      )) as ReadableStream;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     // Return the raw AI stream with SSE headers
-    return new Response(aiStream as ReadableStream, {
+    return new Response(aiStream, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -197,7 +203,7 @@ export class BrieflyAgent extends Agent<Env, BrieflyState> {
     let aiSummary = "";
     try {
       const result = await this.env.AI.run(
-        "@cf/google/gemma-4-26b-a4b-it" as Parameters<Ai["run"]>[0],
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
         {
           messages: [
             { role: "system" as const, content: "You are an innovation director. Be concise." },

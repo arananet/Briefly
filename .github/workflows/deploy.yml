@@ -88,8 +88,8 @@ jobs:
         run: |
           echo ""
           echo "✅ Briefly deployed successfully!"
-          echo "🌐  App:         https://briefly.workers.dev"
-          echo "💬  Chat API:    https://briefly.workers.dev/agents/briefly/global"
-          echo "📡  MCP server:  https://briefly.workers.dev/mcp"
-          echo "🤖  A2A card:    https://briefly.workers.dev/.well-known/agent-card.json"
-          echo "📊  Feed API:    https://briefly.workers.dev/api/feed"
+          echo "🌐  App:         https://briefly.info-693.workers.dev/"
+          echo "💬  Chat API:    https://briefly.info-693.workers.dev/agents/briefly/global"
+          echo "📡  MCP server:  https://briefly.info-693.workers.dev/mcp"
+          echo "🤖  A2A card:    https://briefly.info-693.workers.dev/.well-known/agent-card.json"
+          echo "📊  Feed API:    https://briefly.info-693.workers.dev/api/feed"

@@ -94,9 +94,11 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
                 const data = line.slice(6).trim();
                 if (data === "[DONE]") continue;
                 try {
-                  const parsed = JSON.parse(data) as { type?: string; textDelta?: string; text?: string };
+                  const parsed = JSON.parse(data) as { type?: string; textDelta?: string; text?: string; response?: string };
                   if (parsed.type === "text-delta" && parsed.textDelta) {
                     accumulated += parsed.textDelta;
+                  } else if (parsed.response) {
+                    accumulated += parsed.response;
                   } else if (parsed.text) {
                     accumulated += parsed.text;
                   }
@@ -177,7 +179,7 @@ export function ChatInterface({ initialQuery, agentId }: ChatInterfaceProps) {
       <div className="chat-container">
         {/* Header */}
         <div className="chat-header">
-          <span className="chat-title">Innovation Director · Gemma 4</span>
+          <span className="chat-title">Innovation Director · Llama 3.3</span>
           {brief && (
             <button
               className="btn btn-primary"

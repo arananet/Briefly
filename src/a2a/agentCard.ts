@@ -10,6 +10,10 @@ export interface AgentCard {
   url: string;
   version: string;
   documentationURL?: string;
+  provider: {
+    organization: string;
+    url: string;
+  };
   capabilities: {
     streaming: boolean;
     pushNotifications: boolean;
@@ -17,7 +21,7 @@ export interface AgentCard {
   };
   authentication: {
     required: boolean;
-    schemes: Array<{ type: string }>;
+    schemes: Array<{ scheme: string; description?: string }>;
   };
   interactionModes: {
     defaultInputMimeType: string;
@@ -45,6 +49,10 @@ export function buildAgentCard(baseUrl: string): AgentCard {
     url: baseUrl,
     version: "1.0.0",
     documentationURL: `${baseUrl}/docs`,
+    provider: {
+      organization: "Briefly",
+      url: baseUrl,
+    },
     capabilities: {
       streaming: true,
       pushNotifications: true,
@@ -52,7 +60,7 @@ export function buildAgentCard(baseUrl: string): AgentCard {
     },
     authentication: {
       required: false,
-      schemes: [],
+      schemes: [{ scheme: "none", description: "Publicly accessible — no authentication required" }],
     },
     interactionModes: {
       defaultInputMimeType: "application/json",
