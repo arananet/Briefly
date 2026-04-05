@@ -1,0 +1,71 @@
+name: Deploy Briefly to Cloudflare Workers
+
+on:
+  push:
+    branches: [main, master, claude/ai-agent-scraper-bPzib]
+  workflow_dispatch: # Allow manual deploys from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Create KV namespace (idempotent)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Create KV namespace and capture the ID
+          KV_OUTPUT=$(npx wrangler kv namespace create A2A_TASKS 2>&1 || true)
+          echo "KV Output: $KV_OUTPUT"
+
+          # Extract KV ID from output (handles both create and "already exists" cases)
+          KV_ID=$(echo "$KV_OUTPUT" | grep -o '"id": "[^"]*"' | head -1 | cut -d'"' -f4)
+
+          # If not found in create output, list existing namespaces
+          if [ -z "$KV_ID" ]; then
+            KV_ID=$(npx wrangler kv namespace list 2>/dev/null | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for ns in data:
+              if ns.get('title') == 'briefly-A2A_TASKS':
+                  print(ns['id'])
+                  break
+          " 2>/dev/null || echo "")
+          fi
+
+          if [ -n "$KV_ID" ]; then
+            echo "KV_NAMESPACE_ID=$KV_ID" >> $GITHUB_ENV
+            # Update wrangler.toml with real KV ID
+            sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$KV_ID/" wrangler.toml
+            echo "Updated wrangler.toml with KV ID: $KV_ID"
+          else
+            echo "Warning: Could not determine KV namespace ID. Using placeholder."
+          fi
+
+      - name: Deploy to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --minify
+
+      - name: Output deployment URL
+        run: |
+          echo "✅ Briefly deployed successfully!"
+          echo "🌐 URL: https://briefly.workers.dev"
+          echo "📡 MCP server: https://briefly.workers.dev/mcp"
+          echo "🤖 A2A Agent Card: https://briefly.workers.dev/.well-known/agent-card.json"
