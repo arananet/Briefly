@@ -1,0 +1,32 @@
+name = "briefly"
+main = "src/server.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[browser]
+binding = "BROWSER"
+
+[durable_objects]
+bindings = [
+  { name = "BRIEFLY_AGENT", class_name = "BrieflyAgent" },
+  { name = "SCRAPER_AGENT", class_name = "ScraperAgent" },
+  { name = "MCP_AGENT", class_name = "BrieflyMcpAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BrieflyAgent", "ScraperAgent", "BrieflyMcpAgent"]
+
+# KV namespace for A2A task storage
+# Create with: wrangler kv namespace create A2A_TASKS
+# Then replace the id below with the output id
+[[kv_namespaces]]
+binding = "A2A_TASKS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
