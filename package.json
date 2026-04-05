@@ -2,6 +2,7 @@
   "name": "briefly",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "AI-powered innovation intelligence agent for creative agencies",
   "scripts": {
     "dev": "vite",

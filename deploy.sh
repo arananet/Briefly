@@ -48,10 +48,15 @@ else
   echo "   Run: wrangler kv namespace list"
 fi
 
-# 3. Deploy
+# 3. Build client assets
+echo ""
+echo "🔨 Building client assets..."
+npx vite build
+
+# 4. Deploy (use the Vite-generated config which has correct paths)
 echo ""
 echo "☁️  Deploying worker..."
-npx wrangler deploy --minify
+npx wrangler deploy --config dist/briefly/wrangler.json --minify
 
 echo ""
 echo "✅ Briefly is live!"
