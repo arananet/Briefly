@@ -7,7 +7,7 @@
 export interface AgentCard {
   name: string;
   description: string;
-  serviceURL: string;
+  url: string;
   version: string;
   documentationURL?: string;
   capabilities: {
@@ -42,7 +42,7 @@ export function buildAgentCard(baseUrl: string): AgentCard {
     name: "Briefly",
     description:
       "AI-powered innovation intelligence agent. Acts as Innovation Director for creative agencies — synthesizes AI industry news, recommends tools for specific projects, and generates strategic briefs.",
-    serviceURL: baseUrl,
+    url: baseUrl,
     version: "1.0.0",
     documentationURL: `${baseUrl}/docs`,
     capabilities: {

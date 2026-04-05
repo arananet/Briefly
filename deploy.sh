@@ -56,7 +56,7 @@ npx vite build
 # 4. Deploy (use the Vite-generated config which has correct paths)
 echo ""
 echo "☁️  Deploying worker..."
-npx wrangler deploy --config dist/briefly/wrangler.json --minify
+npx wrangler deploy --config dist/briefly/wrangler.json
 
 echo ""
 echo "✅ Briefly is live!"
