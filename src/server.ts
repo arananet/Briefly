@@ -4,39 +4,40 @@
  * Hono router handles:
  *   - Static asset serving (React SPA)
  *   - A2A agent discovery + task endpoints
- *   - MCP server (Streamable HTTP + legacy SSE)
+ *   - MCP server (stateless Streamable HTTP)
  *   - REST API for the frontend
  *   - Agent WebSocket/HTTP routing
  *
- * Exports BrieflyAgent, ScraperAgent, BrieflyMcpAgent as Durable Object
- * classes so Wrangler can bind them.
+ * Exports BrieflyAgent, ScraperAgent as Durable Object classes for Wrangler.
  */
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { routeAgentRequest } from "agents";
+import { createMcpHandler } from "agents/mcp";
 import type { Env } from "./types";
 import { agentFetch } from "./utils/agentFetch";
 import { buildAgentCard } from "./a2a/agentCard";
 import { a2aRouter } from "./a2a/handler";
 import { BrieflyAgent } from "./agents/BrieflyAgent";
 import { ScraperAgent } from "./agents/ScraperAgent";
-import { BrieflyMcpAgent } from "./mcp/server";
+import { createBrieflyMcpServer } from "./mcp/server";
 
 // Re-export Durable Object classes for Wrangler binding
-export { BrieflyAgent, ScraperAgent, BrieflyMcpAgent };
+export { BrieflyAgent, ScraperAgent };
 
 const app = new Hono<{ Bindings: Env }>();
 
 // ── CORS ───────────────────────────────────────────────────────────────────
 // Open CORS for public interoperability endpoints
 app.use(
-  "/mcp/*",
-  cors({ origin: "*", allowMethods: ["GET", "POST", "OPTIONS"] })
-);
-app.use(
-  "/sse/*",
-  cors({ origin: "*", allowMethods: ["GET", "POST", "OPTIONS"] })
+  "/mcp",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Accept", "Mcp-Session-Id", "MCP-Protocol-Version"],
+    exposeHeaders: ["Mcp-Session-Id"],
+  })
 );
 app.use(
   "/.well-known/*",
@@ -60,36 +61,13 @@ app.get("/.well-known/agent-card.json", (c) => {
 // ── A2A: Task endpoints ────────────────────────────────────────────────────
 app.route("/a2a", a2aRouter);
 
-// ── MCP: Streamable HTTP transport (modern, 2025+) ─────────────────────────
+// ── MCP: Streamable HTTP transport (stateless, 2025+ standard) ────────────
+// Creates a fresh McpServer per request — avoids DO lifecycle issues and
+// correctly exposes all 4 tools via tools/list.
 app.all("/mcp", (c) => {
-  return BrieflyMcpAgent.serve("/mcp", { binding: "MCP_AGENT" }).fetch(
-    c.req.raw,
-    c.env,
-    c.executionCtx
-  );
-});
-app.all("/mcp/*", (c) => {
-  return BrieflyMcpAgent.serve("/mcp", { binding: "MCP_AGENT" }).fetch(
-    c.req.raw,
-    c.env,
-    c.executionCtx
-  );
-});
-
-// ── MCP: Legacy SSE transport (backwards compatibility) ────────────────────
-app.all("/sse", (c) => {
-  return BrieflyMcpAgent.serveSSE("/sse", { binding: "MCP_AGENT" }).fetch(
-    c.req.raw,
-    c.env,
-    c.executionCtx
-  );
-});
-app.all("/sse/*", (c) => {
-  return BrieflyMcpAgent.serveSSE("/sse", { binding: "MCP_AGENT" }).fetch(
-    c.req.raw,
-    c.env,
-    c.executionCtx
-  );
+  const server = createBrieflyMcpServer(c.env);
+  const handler = createMcpHandler(server, { route: "/mcp" });
+  return handler(c.req.raw, c.env, c.executionCtx);
 });
 
 // ── REST API ───────────────────────────────────────────────────────────────

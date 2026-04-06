@@ -10,13 +10,12 @@ binding = "AI"
 [durable_objects]
 bindings = [
   { name = "BRIEFLY_AGENT", class_name = "BrieflyAgent" },
-  { name = "SCRAPER_AGENT", class_name = "ScraperAgent" },
-  { name = "MCP_AGENT", class_name = "BrieflyMcpAgent" }
+  { name = "SCRAPER_AGENT", class_name = "ScraperAgent" }
 ]
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["BrieflyAgent", "ScraperAgent", "BrieflyMcpAgent"]
+new_sqlite_classes = ["BrieflyAgent", "ScraperAgent"]
 
 # KV namespace for A2A task storage
 # Create with: wrangler kv namespace create A2A_TASKS

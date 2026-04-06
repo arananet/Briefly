@@ -59,9 +59,8 @@ a2aRouter.post("/tasks", async (c) => {
     );
   }
 
-  if (input === undefined || input === null) {
-    return c.json({ error: "input is required" }, 400);
-  }
+  // Default to empty object if no input provided (skills handle missing fields gracefully)
+  const safeInput = input ?? {};
 
   // Sanitize webhook URL (must be HTTPS)
   if (
@@ -71,7 +70,7 @@ a2aRouter.post("/tasks", async (c) => {
     return c.json({ error: "pushNotificationConfig.url must use HTTPS" }, 400);
   }
 
-  const task = await createTask(c.env.A2A_TASKS, skill, input);
+  const task = await createTask(c.env.A2A_TASKS, skill, safeInput);
 
   // Execute skill asynchronously — don't block the response
   c.executionCtx.waitUntil(

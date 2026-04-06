@@ -130,31 +130,41 @@ export async function executeSkill(
 
     switch (task.skill) {
       case "search_tools": {
-        const input = task.input as { query: string; category?: string; limit?: number };
-        output = await agentFetch(scraperStub, "/call/queryItems", {
-          query: input.query,
-          category: input.category === "any" ? undefined : input.category,
+        const input = task.input as { query?: string; category?: string; limit?: number };
+        const query = input.query ?? "";
+        const results = await agentFetch(scraperStub, "/call/queryItems", {
+          query: query || undefined,
+          category: input.category === "any" ? undefined : (input.category ?? "tool"),
           limit: input.limit ?? 10,
         });
+        output = results.length > 0
+          ? results
+          : { message: "No tools found yet. The scraper may still be populating data — check back in a minute." };
         break;
       }
 
       case "industry_summary": {
         const input = task.input as { source?: string; limit?: number };
-        output = await agentFetch(scraperStub, "/call/queryItems", {
+        const results = await agentFetch(scraperStub, "/call/queryItems", {
           category: "news",
           source: input.source === "all" ? undefined : input.source,
           limit: input.limit ?? 10,
         });
+        output = results.length > 0
+          ? results
+          : { message: "No news available yet. The scraper may still be populating data — check back in a minute." };
         break;
       }
 
       case "model_leaderboard": {
         const input = task.input as { limit?: number };
-        output = await agentFetch(scraperStub, "/call/queryItems", {
+        const results = await agentFetch(scraperStub, "/call/queryItems", {
           category: "leaderboard",
           limit: input.limit ?? 10,
         });
+        output = results.length > 0
+          ? results
+          : { message: "Leaderboard data not available yet. The scraper may still be populating — check back in a minute." };
         break;
       }
 

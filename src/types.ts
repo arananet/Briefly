@@ -28,7 +28,6 @@ export interface Env {
   AI: Ai;
   BRIEFLY_AGENT: DurableObjectNamespace;
   SCRAPER_AGENT: DurableObjectNamespace;
-  MCP_AGENT: DurableObjectNamespace;
   A2A_TASKS: KVNamespace;
   ASSETS: Fetcher;
 }
