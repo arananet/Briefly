@@ -1,102 +1,45 @@
 /**
- * Product Hunt scraper using their public GraphQL API.
- * No authentication required for reading public posts.
+ * Product Hunt scraper — uses the public RSS feed (no API key required).
+ * Falls back to parsing the HTML daily digest page if RSS fails.
  */
 
 import { ScrapedItem } from "../types";
-import { truncate } from "../utils/htmlParser";
+import { parseRssXml, truncate } from "../utils/htmlParser";
+import { getApiHeaders } from "../utils/userAgents";
 import { createItemId } from "./index";
 
-const PH_API = "https://api.producthunt.com/v2/api/graphql";
-
-const QUERY = `
-query TodaysPosts($after: DateTime!) {
-  posts(first: 20, order: VOTES, postedAfter: $after) {
-    edges {
-      node {
-        id
-        name
-        tagline
-        description
-        url
-        votesCount
-        website
-        topics {
-          edges {
-            node {
-              name
-            }
-          }
-        }
-        createdAt
-      }
-    }
-  }
-}
-`;
-
-interface PHNode {
-  id: string;
-  name: string;
-  tagline: string;
-  description: string | null;
-  url: string;
-  website: string | null;
-  votesCount: number;
-  topics: { edges: Array<{ node: { name: string } }> };
-  createdAt: string;
-}
+const PH_RSS = "https://www.producthunt.com/feed";
+const PH_BASE = "https://www.producthunt.com";
 
 export async function scrapeProductHunt(): Promise<ScrapedItem[]> {
-  // Fetch posts from the last 48 hours (wider window for reliability)
-  const after = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-
   try {
-    const response = await fetch(PH_API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (compatible; BrieflyBot/1.0; +https://briefly.workers.dev)",
-        Host: "api.producthunt.com",
-      },
-      body: JSON.stringify({ query: QUERY, variables: { after } }),
+    const res = await fetch(PH_RSS, {
+      headers: getApiHeaders(PH_RSS),
+      redirect: "follow",
     });
 
-    if (!response.ok) return [];
+    if (!res.ok) return [];
 
-    const json = (await response.json()) as {
-      data?: { posts?: { edges?: Array<{ node: PHNode }> } };
-      errors?: unknown[];
-    };
+    const xml = await res.text();
+    if (!xml || xml.trimStart().startsWith("<!")) return [];
 
-    if (!json.data?.posts?.edges) return [];
+    const parsed = parseRssXml(xml);
+    if (parsed.length === 0) return [];
 
     const now = new Date().toISOString();
 
-    return json.data.posts.edges
-      .filter((e) => e.node)
-      .map(({ node }) => {
-        const tags = node.topics.edges.map((t) => t.node.name);
-        if (tags.length === 0) tags.push("Product");
-
-        return {
-          id: createItemId("producthunt", node.url),
-          source: "producthunt" as const,
-          sourceUrl: "https://producthunt.com",
-          title: node.name,
-          summary: truncate(
-            node.description || node.tagline || node.name,
-            250
-          ),
-          url: node.url,
-          category: "tool" as const,
-          tags,
-          publishedAt: node.createdAt || now,
-          scrapedAt: now,
-        };
-      });
+    return parsed.slice(0, 15).map((item) => ({
+      id: createItemId("producthunt", item.link),
+      source: "producthunt" as const,
+      sourceUrl: PH_BASE,
+      title: item.title,
+      summary: truncate(item.description || item.title, 250),
+      url: item.link,
+      category: "tool" as const,
+      tags: ["Product Hunt", "AI"],
+      publishedAt: item.pubDate || now,
+      scrapedAt: now,
+    }));
   } catch {
     return [];
   }

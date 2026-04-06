@@ -6,11 +6,11 @@
  *
  * Connect via: https://briefly.info-693.workers.dev/mcp
  *
- * Exposes 4 tools:
- *   - search_ai_tools
- *   - get_industry_news
- *   - get_model_leaderboard
- *   - generate_brief
+ * Exposes 4 tools — all return raw scraped data, no LLM calls:
+ *   - search_ai_tools      — find AI tools by keyword
+ *   - get_industry_news    — latest AI news headlines
+ *   - get_model_leaderboard — Arena.ai model rankings
+ *   - generate_brief        — structured innovation brief from scraped data
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,15 +18,41 @@ import { z } from "zod";
 import type { Env, ScrapedItem } from "../types";
 import { agentFetch } from "../utils/agentFetch";
 
-const BRIEFLY_SYSTEM_PROMPT = `You are the Innovation Director of a leading creative agency.
-Synthesize AI industry intelligence into actionable, ROI-focused recommendations for creative teams.`;
-
 async function queryScraperAgentMcp(
   env: Env,
   opts: { query?: string; category?: string; source?: string; limit?: number }
 ): Promise<ScrapedItem[]> {
   const stub = env.SCRAPER_AGENT.get(env.SCRAPER_AGENT.idFromName("global"));
   return (await agentFetch(stub, "/call/queryItems", opts)) as ScrapedItem[];
+}
+
+/**
+ * Normalise a free-form category string to one of the valid DB values.
+ * Accepts fuzzy inputs like "Tool", "NEWS", "arena", etc.
+ */
+function normaliseCategory(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const s = raw.toLowerCase();
+  if (s.includes("leader") || s.includes("arena") || s.includes("rank") || s.includes("model")) return "leaderboard";
+  if (s.includes("news") || s.includes("newsletter") || s.includes("article")) return "news";
+  if (s.includes("tool") || s.includes("app") || s.includes("product")) return "tool";
+  if (s === "any" || s === "all") return undefined;
+  return undefined; // unknown → no filter
+}
+
+/**
+ * Normalise a free-form source string to one of the valid DB values.
+ */
+function normaliseSource(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const s = raw.toLowerCase();
+  if (s.includes("rundown") || s === "therundown") return "therundown";
+  if (s.includes("neuron") || s === "theneuron") return "theneuron";
+  if (s.includes("futurepedia")) return "futurepedia";
+  if (s.includes("producthunt") || s.includes("product hunt") || s === "ph") return "producthunt";
+  if (s.includes("arena")) return "arena";
+  if (s === "all" || s === "any") return undefined;
+  return undefined; // unknown → no filter
 }
 
 /**
@@ -42,52 +68,38 @@ export function createBrieflyMcpServer(env: Env): McpServer {
   // ── Tool 1: Search AI tools ───────────────────────────────────────────────
   server.tool(
     "search_ai_tools",
-    "Find AI tools from Futurepedia and Product Hunt that match a given project description or use case. Always returns source URL for citation.",
+    "Find AI tools from Futurepedia and Product Hunt that match a given project description or use case.",
     {
-      query: z.string().describe("Keywords or project description to match against"),
-      category: z
-        .enum(["tool", "news", "leaderboard", "any"])
-        .default("tool")
-        .describe("Filter results by category"),
-      limit: z
-        .number()
-        .min(1)
-        .max(20)
-        .default(10)
-        .describe("Maximum number of results"),
+      query: z.string().describe("Keywords or project description to search for"),
+      category: z.string().optional().describe("Filter: 'tool', 'news', 'leaderboard', or 'any'"),
+      limit: z.number().min(1).max(20).default(10).describe("Maximum number of results"),
     },
     async ({ query, category, limit }) => {
       const items = await queryScraperAgentMcp(env, {
         query,
-        category: category === "any" ? undefined : category,
+        category: normaliseCategory(category),
         limit,
       });
 
       if (items.length === 0) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No matching tools found. The scraper may still be populating data — try again in a moment.",
-            },
-          ],
+          content: [{
+            type: "text" as const,
+            text: "No matching tools found. Data may still be loading — try again in a moment, or try a broader search.",
+          }],
         };
       }
 
       const formatted = items
-        .map(
-          (item) =>
-            `**${item.title}** [${item.source.toUpperCase()}]\n` +
-            `${item.summary}\n` +
-            `URL: ${item.url}\n` +
-            `Tags: ${item.tags.join(", ")}\n` +
-            `Source: ${item.sourceUrl}`
+        .map((item) =>
+          `**${item.title}** [${item.source.toUpperCase()}]\n` +
+          `${item.summary}\n` +
+          `URL: ${item.url}\n` +
+          `Tags: ${item.tags.join(", ")}`
         )
         .join("\n\n---\n\n");
 
-      return {
-        content: [{ type: "text" as const, text: formatted }],
-      };
+      return { content: [{ type: "text" as const, text: formatted }] };
     }
   );
 
@@ -96,57 +108,41 @@ export function createBrieflyMcpServer(env: Env): McpServer {
     "get_industry_news",
     "Retrieve the latest AI industry news from The Rundown AI and The Neuron Daily newsletters.",
     {
-      source: z
-        .enum(["therundown", "theneuron", "all"])
-        .default("all")
-        .describe("Which newsletter source to query"),
-      limit: z
-        .number()
-        .min(1)
-        .max(20)
-        .default(10)
-        .describe("Maximum number of articles"),
+      source: z.string().optional().describe("Filter by source: 'therundown', 'theneuron', or omit for all"),
+      limit: z.number().min(1).max(20).default(10).describe("Maximum number of articles"),
     },
     async ({ source, limit }) => {
       const items = await queryScraperAgentMcp(env, {
         category: "news",
-        source: source === "all" ? undefined : source,
+        source: normaliseSource(source),
         limit,
       });
 
       if (items.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "No news available right now." }],
+          content: [{ type: "text" as const, text: "No news available yet. Check back in a few minutes." }],
         };
       }
 
       const formatted = items
-        .map(
-          (item) =>
-            `**${item.title}** (${item.source})\n` +
-            `${item.summary}\n` +
-            `Read: ${item.url}\n` +
-            `Published: ${new Date(item.publishedAt).toLocaleDateString()}`
+        .map((item) =>
+          `**${item.title}** (${item.source})\n` +
+          `${item.summary}\n` +
+          `Read: ${item.url}\n` +
+          `Published: ${new Date(item.publishedAt).toLocaleDateString()}`
         )
         .join("\n\n---\n\n");
 
-      return {
-        content: [{ type: "text" as const, text: formatted }],
-      };
+      return { content: [{ type: "text" as const, text: formatted }] };
     }
   );
 
   // ── Tool 3: Get model leaderboard ─────────────────────────────────────────
   server.tool(
     "get_model_leaderboard",
-    "Retrieve the current AI model leaderboard from Arena.ai. Shows ranked models with scores.",
+    "Retrieve the current AI model leaderboard from Arena.ai showing ranked models with scores.",
     {
-      limit: z
-        .number()
-        .min(1)
-        .max(20)
-        .default(10)
-        .describe("Number of top models to return"),
+      limit: z.number().min(1).max(20).default(10).describe("Number of top models to return"),
     },
     async ({ limit }) => {
       const items = await queryScraperAgentMcp(env, {
@@ -156,33 +152,24 @@ export function createBrieflyMcpServer(env: Env): McpServer {
 
       if (items.length === 0) {
         return {
-          content: [
-            { type: "text" as const, text: "Leaderboard data not available." },
-          ],
+          content: [{ type: "text" as const, text: "Leaderboard data not available yet — the scraper runs every 6 hours." }],
         };
       }
 
       const formatted =
-        "# Arena.ai Text Model Leaderboard\n\n" +
-        items
-          .map((item) => `${item.title}\n${item.summary}`)
-          .join("\n\n");
+        "# AI Model Leaderboard (Arena.ai)\n\n" +
+        items.map((item) => `${item.title}\n${item.summary}`).join("\n\n");
 
-      return {
-        content: [{ type: "text" as const, text: formatted }],
-      };
+      return { content: [{ type: "text" as const, text: formatted }] };
     }
   );
 
-  // ── Tool 4: Generate brief ────────────────────────────────────────────────
+  // ── Tool 4: Generate brief (raw data, no LLM) ─────────────────────────────
   server.tool(
     "generate_brief",
-    "Generate a structured AI innovation brief for a specific topic or project using Gemma 4. Returns JSON suitable for PDF export.",
+    "Generate a structured AI innovation brief for a topic. Returns raw scraped data as structured JSON — no AI generation, just real intelligence from monitored sources.",
     {
-      topic: z
-        .string()
-        .max(500)
-        .describe("Project or topic to generate the brief for"),
+      topic: z.string().max(500).describe("Project or topic to build the brief for"),
     },
     async ({ topic }) => {
       const [tools, news, leaderboard] = await Promise.all([
@@ -191,64 +178,36 @@ export function createBrieflyMcpServer(env: Env): McpServer {
         queryScraperAgentMcp(env, { category: "leaderboard", limit: 5 }),
       ]);
 
-      const context =
-        `Tools: ${tools.map((t) => `${t.title}: ${t.summary}`).join("; ")}\n` +
-        `News: ${news.map((n) => n.title).join("; ")}\n` +
-        `Top Models: ${leaderboard.slice(0, 3).map((l) => l.title).join(", ")}`;
-
-      let aiSummary = "";
-      try {
-        const result = await env.AI.run(
-          "@cf/google/gemma-4-26b-a4b-it" as Parameters<Ai["run"]>[0],
-          {
-            messages: [
-              { role: "system" as const, content: BRIEFLY_SYSTEM_PROMPT },
-              {
-                role: "user" as const,
-                content: `Generate a concise executive summary (3-4 sentences) for an innovation brief about: "${topic}"\n\nContext:\n${context}`,
-              },
-            ],
-          }
-        );
-        aiSummary =
-          typeof result === "string"
-            ? result
-            : (result as { response?: string }).response ?? "";
-      } catch {
-        aiSummary = `Innovation brief for ${topic}: Strategic assessment of AI tools and industry trends for creative agency implementation.`;
-      }
-
       const brief = {
         topic,
         generatedAt: new Date().toISOString(),
-        summary: aiSummary,
+        dataSource: "Live scrape from Futurepedia, Product Hunt, The Rundown AI, The Neuron Daily, Arena.ai",
         recommendedTools: tools.map((t) => ({
           name: t.title,
+          summary: t.summary,
           source: t.source,
-          sourceUrl: t.sourceUrl,
-          matchReason: `Relevant to "${topic}" — Tags: ${t.tags.join(", ")}`,
-          toolUrl: t.url,
+          url: t.url,
+          tags: t.tags,
         })),
         keyNews: news.map((n) => ({
           title: n.title,
+          summary: n.summary,
           source: n.source,
           url: n.url,
+          publishedAt: n.publishedAt,
         })),
         leaderboardSnapshot: leaderboard.slice(0, 5).map((l, i) => ({
           rank: i + 1,
           model: l.title.replace(/^#\d+\s/, ""),
-          provider: l.tags[0] || "Unknown",
-          score: l.summary.match(/Score: ([^\s·]+)/)?.[1] || "N/A",
+          summary: l.summary,
         })),
+        status: (tools.length + news.length + leaderboard.length) === 0
+          ? "no_data — scraper may still be populating"
+          : "ok",
       };
 
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(brief, null, 2),
-          },
-        ],
+        content: [{ type: "text" as const, text: JSON.stringify(brief, null, 2) }],
       };
     }
   );

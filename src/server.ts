@@ -120,6 +120,26 @@ app.post("/api/scrape", async (c) => {
   }
 });
 
+// GET /api/scraper-status — debug endpoint: reports scraper state + item counts
+app.get("/api/scraper-status", async (c) => {
+  try {
+    const stub = c.env.SCRAPER_AGENT.get(c.env.SCRAPER_AGENT.idFromName("global"));
+    const [status, tools, news, leaderboard] = await Promise.all([
+      agentFetch(stub, "/call/getStatus", {}),
+      agentFetch(stub, "/call/queryItems", { category: "tool", limit: 3 }),
+      agentFetch(stub, "/call/queryItems", { category: "news", limit: 3 }),
+      agentFetch(stub, "/call/queryItems", { category: "leaderboard", limit: 3 }),
+    ]);
+    return c.json({
+      scraperStatus: status,
+      sampleCounts: { tools: (tools as unknown[]).length, news: (news as unknown[]).length, leaderboard: (leaderboard as unknown[]).length },
+      samples: { tools, news, leaderboard },
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+
 // ── Agent routing (BrieflyAgent, ScraperAgent) ────────────────────────────
 // routeAgentRequest adds the namespace/room headers the agents SDK requires.
 app.all("/agents/*", async (c) => {
