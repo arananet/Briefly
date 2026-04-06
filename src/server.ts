@@ -61,14 +61,14 @@ app.route("/a2a", a2aRouter);
 
 // ── MCP: Streamable HTTP transport (modern, 2025+) ─────────────────────────
 app.all("/mcp", (c) => {
-  return BrieflyMcpAgent.serve("/mcp").fetch(
+  return BrieflyMcpAgent.serve("/mcp", { binding: "MCP_AGENT" }).fetch(
     c.req.raw,
     c.env,
     c.executionCtx
   );
 });
 app.all("/mcp/*", (c) => {
-  return BrieflyMcpAgent.serve("/mcp").fetch(
+  return BrieflyMcpAgent.serve("/mcp", { binding: "MCP_AGENT" }).fetch(
     c.req.raw,
     c.env,
     c.executionCtx
@@ -77,14 +77,14 @@ app.all("/mcp/*", (c) => {
 
 // ── MCP: Legacy SSE transport (backwards compatibility) ────────────────────
 app.all("/sse", (c) => {
-  return BrieflyMcpAgent.serveSSE("/sse").fetch(
+  return BrieflyMcpAgent.serveSSE("/sse", { binding: "MCP_AGENT" }).fetch(
     c.req.raw,
     c.env,
     c.executionCtx
   );
 });
 app.all("/sse/*", (c) => {
-  return BrieflyMcpAgent.serveSSE("/sse").fetch(
+  return BrieflyMcpAgent.serveSSE("/sse", { binding: "MCP_AGENT" }).fetch(
     c.req.raw,
     c.env,
     c.executionCtx
