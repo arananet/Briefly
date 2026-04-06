@@ -7,13 +7,16 @@ import type { ScrapedItem } from "../types";
 
 // Stable agent ID for this session (anonymous users share a global instance)
 const AGENT_ID = "global";
-const FEED_POLL_INTERVAL = 60_000; // Refresh feed every 60s
+const FEED_POLL_INTERVAL = 60_000;
+const FEED_POLL_FAST = 8_000; // Poll fast while feed is empty
 
 export function App() {
   const [feedItems, setFeedItems] = useState<ScrapedItem[]>([]);
   const [feedLoading, setFeedLoading] = useState(true);
   const [chatQuery, setChatQuery] = useState<string | undefined>(undefined);
   const [chatActive, setChatActive] = useState(false);
+  const feedItemsRef = React.useRef(feedItems);
+  feedItemsRef.current = feedItems;
 
   const fetchFeed = useCallback(async () => {
     try {
@@ -29,11 +32,21 @@ export function App() {
     }
   }, []);
 
-  // Initial load + polling
+  // Trigger an immediate scrape on first load so the ScraperAgent wakes up
+  useEffect(() => {
+    fetch("/api/scrape", { method: "POST" }).catch(() => {});
+  }, []);
+
+  // Initial load + adaptive polling (fast while empty, slow once populated)
   useEffect(() => {
     fetchFeed();
-    const interval = setInterval(fetchFeed, FEED_POLL_INTERVAL);
-    return () => clearInterval(interval);
+    const tick = () => {
+      fetchFeed();
+      const delay = feedItemsRef.current.length === 0 ? FEED_POLL_FAST : FEED_POLL_INTERVAL;
+      timer = setTimeout(tick, delay);
+    };
+    let timer = setTimeout(tick, FEED_POLL_FAST);
+    return () => clearTimeout(timer);
   }, [fetchFeed]);
 
   const handleSearch = (query: string) => {
