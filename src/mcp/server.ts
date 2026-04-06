@@ -16,6 +16,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env, ScrapedItem } from "../types";
+import { agentFetch } from "../utils/agentFetch";
 
 const BRIEFLY_SYSTEM_PROMPT = `You are the Innovation Director of a leading creative agency.
 Synthesize AI industry intelligence into actionable, ROI-focused recommendations for creative teams.`;
@@ -24,21 +25,8 @@ async function queryScraperAgentMcp(
   env: Env,
   opts: { query?: string; category?: string; source?: string; limit?: number }
 ): Promise<ScrapedItem[]> {
-  try {
-    const id = env.SCRAPER_AGENT.idFromName("global");
-    const stub = env.SCRAPER_AGENT.get(id);
-    const response = await stub.fetch(
-      new Request("https://internal/call/queryItems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(opts),
-      })
-    );
-    if (!response.ok) return [];
-    return (await response.json()) as ScrapedItem[];
-  } catch {
-    return [];
-  }
+  const stub = env.SCRAPER_AGENT.get(env.SCRAPER_AGENT.idFromName("global"));
+  return (await agentFetch(stub, "/call/queryItems", opts)) as ScrapedItem[];
 }
 
 export class BrieflyMcpAgent extends McpAgent<Env> {

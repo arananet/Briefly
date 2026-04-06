@@ -16,6 +16,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { routeAgentRequest } from "agents";
 import type { Env } from "./types";
+import { agentFetch } from "./utils/agentFetch";
 import { buildAgentCard } from "./a2a/agentCard";
 import { a2aRouter } from "./a2a/handler";
 import { BrieflyAgent } from "./agents/BrieflyAgent";
@@ -95,31 +96,14 @@ app.all("/sse/*", (c) => {
 
 // GET /api/feed — latest scraped items (for the industry feed panel)
 app.get("/api/feed", async (c) => {
-  try {
-    const url = new URL(c.req.url);
-    const category = url.searchParams.get("category") ?? undefined;
-    const source = url.searchParams.get("source") ?? undefined;
-    const limit = Math.min(
-      parseInt(url.searchParams.get("limit") ?? "20", 10),
-      50
-    );
-
-    const id = c.env.SCRAPER_AGENT.idFromName("global");
-    const stub = c.env.SCRAPER_AGENT.get(id);
-    const res = await stub.fetch(
-      new Request("https://internal/call/queryItems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, source, limit }),
-      })
-    );
-
-    if (!res.ok) return c.json([], 200);
-    const items = await res.json();
-    return c.json(items);
-  } catch {
-    return c.json([], 200);
-  }
+  const url = new URL(c.req.url);
+  const stub = c.env.SCRAPER_AGENT.get(c.env.SCRAPER_AGENT.idFromName("global"));
+  const items = await agentFetch(stub, "/call/queryItems", {
+    category: url.searchParams.get("category") ?? undefined,
+    source: url.searchParams.get("source") ?? undefined,
+    limit: Math.min(parseInt(url.searchParams.get("limit") ?? "20", 10), 50),
+  });
+  return c.json(items);
 });
 
 // POST /api/search — search scraped items
@@ -131,29 +115,17 @@ app.post("/api/search", async (c) => {
       source?: string;
       limit?: number;
     }>();
-
-    // Sanitize input
     const query = typeof body.query === "string"
       ? body.query.slice(0, 500).replace(/[^\w\s\-.,!?]/g, "")
       : undefined;
-
-    const id = c.env.SCRAPER_AGENT.idFromName("global");
-    const stub = c.env.SCRAPER_AGENT.get(id);
-    const res = await stub.fetch(
-      new Request("https://internal/call/queryItems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query,
-          category: body.category,
-          source: body.source,
-          limit: Math.min(body.limit ?? 20, 50),
-        }),
-      })
-    );
-
-    if (!res.ok) return c.json([], 200);
-    return c.json(await res.json());
+    const stub = c.env.SCRAPER_AGENT.get(c.env.SCRAPER_AGENT.idFromName("global"));
+    const items = await agentFetch(stub, "/call/queryItems", {
+      query,
+      category: body.category,
+      source: body.source,
+      limit: Math.min(body.limit ?? 20, 50),
+    });
+    return c.json(items);
   } catch {
     return c.json({ error: "Search failed" }, 500);
   }
@@ -162,16 +134,9 @@ app.post("/api/search", async (c) => {
 // POST /api/scrape — manually trigger a scrape refresh (admin use)
 app.post("/api/scrape", async (c) => {
   try {
-    const id = c.env.SCRAPER_AGENT.idFromName("global");
-    const stub = c.env.SCRAPER_AGENT.get(id);
-    const res = await stub.fetch(
-      new Request("https://internal/call/scrapeAll", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      })
-    );
-    return c.json(await res.json());
+    const stub = c.env.SCRAPER_AGENT.get(c.env.SCRAPER_AGENT.idFromName("global"));
+    const result = await agentFetch(stub, "/call/scrapeAll", {});
+    return c.json(result);
   } catch {
     return c.json({ error: "Scrape trigger failed" }, 500);
   }

@@ -6,6 +6,7 @@
 
 import { Agent, callable } from "agents";
 import type { Env, ScrapedItem, GeneratedBrief, ChatMessage } from "../types";
+import { agentFetch } from "../utils/agentFetch";
 
 const SYSTEM_PROMPT = `You are the Innovation Director of a leading creative agency called Briefly.
 
@@ -37,20 +38,8 @@ async function queryScraperAgent(
   env: Env,
   opts: { query?: string; category?: string; source?: string; limit?: number }
 ): Promise<ScrapedItem[]> {
-  try {
-    const id = env.SCRAPER_AGENT.idFromName("global");
-    const stub = env.SCRAPER_AGENT.get(id);
-    const res = await stub.fetch(
-      new Request("https://internal/call/queryItems", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(opts),
-      })
-    );
-    return res.ok ? ((await res.json()) as ScrapedItem[]) : [];
-  } catch {
-    return [];
-  }
+  const stub = env.SCRAPER_AGENT.get(env.SCRAPER_AGENT.idFromName("global"));
+  return (await agentFetch(stub, "/call/queryItems", opts)) as ScrapedItem[];
 }
 
 function sanitizeInput(input: string): string {

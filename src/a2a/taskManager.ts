@@ -3,7 +3,8 @@
  * Tasks expire after 24 hours automatically.
  */
 
-import type { A2ATask, A2ATaskStatus, A2APushConfig, Env } from "../types";
+import type { A2ATask, A2ATaskStatus, A2APushConfig, Env, ScrapedItem } from "../types";
+import { agentFetch } from "../utils/agentFetch";
 
 const TTL_SECONDS = 86400; // 24 hours
 
@@ -130,81 +131,40 @@ export async function executeSkill(
     switch (task.skill) {
       case "search_tools": {
         const input = task.input as { query: string; category?: string; limit?: number };
-        const res = await scraperStub.fetch(
-          new Request("https://internal/call/queryItems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: input.query,
-              category: input.category === "any" ? undefined : input.category,
-              limit: input.limit ?? 10,
-            }),
-          })
-        );
-        output = res.ok ? await res.json() : [];
+        output = await agentFetch(scraperStub, "/call/queryItems", {
+          query: input.query,
+          category: input.category === "any" ? undefined : input.category,
+          limit: input.limit ?? 10,
+        });
         break;
       }
 
       case "industry_summary": {
         const input = task.input as { source?: string; limit?: number };
-        const res = await scraperStub.fetch(
-          new Request("https://internal/call/queryItems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              category: "news",
-              source: input.source === "all" ? undefined : input.source,
-              limit: input.limit ?? 10,
-            }),
-          })
-        );
-        output = res.ok ? await res.json() : [];
+        output = await agentFetch(scraperStub, "/call/queryItems", {
+          category: "news",
+          source: input.source === "all" ? undefined : input.source,
+          limit: input.limit ?? 10,
+        });
         break;
       }
 
       case "model_leaderboard": {
         const input = task.input as { limit?: number };
-        const res = await scraperStub.fetch(
-          new Request("https://internal/call/queryItems", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ category: "leaderboard", limit: input.limit ?? 10 }),
-          })
-        );
-        output = res.ok ? await res.json() : [];
+        output = await agentFetch(scraperStub, "/call/queryItems", {
+          category: "leaderboard",
+          limit: input.limit ?? 10,
+        });
         break;
       }
 
       case "generate_brief": {
         const input = task.input as { topic: string };
-        // Collect context data
-        const [toolsRes, newsRes, lbRes] = await Promise.all([
-          scraperStub.fetch(
-            new Request("https://internal/call/queryItems", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ query: input.topic, category: "tool", limit: 5 }),
-            })
-          ),
-          scraperStub.fetch(
-            new Request("https://internal/call/queryItems", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ category: "news", limit: 5 }),
-            })
-          ),
-          scraperStub.fetch(
-            new Request("https://internal/call/queryItems", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ category: "leaderboard", limit: 5 }),
-            })
-          ),
+        const [tools, news, leaderboard] = await Promise.all([
+          agentFetch(scraperStub, "/call/queryItems", { query: input.topic, category: "tool", limit: 5 }),
+          agentFetch(scraperStub, "/call/queryItems", { category: "news", limit: 5 }),
+          agentFetch(scraperStub, "/call/queryItems", { category: "leaderboard", limit: 5 }),
         ]);
-
-        const tools = toolsRes.ok ? await toolsRes.json() : [];
-        const news = newsRes.ok ? await newsRes.json() : [];
-        const leaderboard = lbRes.ok ? await lbRes.json() : [];
 
         let aiSummary = "";
         try {
@@ -232,19 +192,19 @@ export async function executeSkill(
           topic: input.topic,
           generatedAt: new Date().toISOString(),
           summary: aiSummary,
-          recommendedTools: (tools as Array<{ title: string; source: string; sourceUrl: string; tags: string[]; url: string }>).map((t) => ({
+          recommendedTools: (tools as ScrapedItem[]).map((t) => ({
             name: t.title,
             source: t.source,
             sourceUrl: t.sourceUrl,
             matchReason: `Tags: ${t.tags?.join(", ")}`,
             toolUrl: t.url,
           })),
-          keyNews: (news as Array<{ title: string; source: string; url: string }>).map((n) => ({
+          keyNews: (news as ScrapedItem[]).map((n) => ({
             title: n.title,
             source: n.source,
             url: n.url,
           })),
-          leaderboardSnapshot: (leaderboard as Array<{ title: string; tags: string[]; summary: string }>).slice(0, 5).map((l, i) => ({
+          leaderboardSnapshot: (leaderboard as ScrapedItem[]).slice(0, 5).map((l, i) => ({
             rank: i + 1,
             model: l.title.replace(/^#\d+\s/, ""),
             provider: l.tags?.[0] || "Unknown",
