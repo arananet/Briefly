@@ -3,7 +3,7 @@
  * deduplicates by URL, and returns a combined ScrapedItem[].
  */
 
-import type { ScrapedItem } from "../types";
+import type { Env, ScrapedItem } from "../types";
 import { scrapeTheRundown, scrapeTheNeuron } from "./rss";
 import { scrapeFuturepedia } from "./futurepedia";
 import { scrapeProductHunt } from "./producthunt";
@@ -29,13 +29,13 @@ export function createItemId(source: string, url: string): string {
  * Run all scrapers concurrently. Failures in individual scrapers
  * do not affect others (Promise.allSettled).
  */
-export async function scrapeAllSources(): Promise<ScrapedItem[]> {
+export async function scrapeAllSources(env: Env): Promise<ScrapedItem[]> {
   const results = await Promise.allSettled([
     scrapeTheRundown(),
     scrapeTheNeuron(),
-    scrapeFuturepedia(),
+    scrapeFuturepedia(env),
     scrapeProductHunt(),
-    scrapeArena(),
+    scrapeArena(env),
   ]);
 
   const all: ScrapedItem[] = [];

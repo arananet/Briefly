@@ -26,8 +26,10 @@ export interface ScrapedItem {
 
 export interface Env {
   AI: Ai;
+  BROWSER: Fetcher;
   BRIEFLY_AGENT: DurableObjectNamespace;
   SCRAPER_AGENT: DurableObjectNamespace;
+  CRAWLER_AGENT: DurableObjectNamespace;
   A2A_TASKS: KVNamespace;
   ASSETS: Fetcher;
 }

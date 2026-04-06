@@ -1,17 +1,19 @@
 /**
- * Internal DO-to-DO fetch helper.
- * Adds the x-partykit-room header required by the partyserver base class
- * when making direct stub calls (bypassing routeAgentRequest).
+ * Internal DO-to-DO call helpers.
  *
- * Returns [] on any failure — callers treat empty as "not yet available".
- * Enable verbose mode to surface errors in the scraper-status endpoint.
+ * callAgent<T>  — generic; returns T | null on any failure
+ * agentFetch    — backwards-compat wrapper that always returns unknown[]
+ *
+ * Both add the x-partykit-room header required by the partyserver base class.
  */
-export async function agentFetch(
+
+/** Generic agent callable helper — returns T or null on any failure. */
+export async function callAgent<T>(
   stub: DurableObjectStub,
   path: string,
   body: unknown,
   room = "global"
-): Promise<unknown[]> {
+): Promise<T | null> {
   try {
     const res = await stub.fetch(
       new Request(`https://internal${path}`, {
@@ -25,23 +27,34 @@ export async function agentFetch(
     );
 
     if (!res.ok) {
-      console.error(`[agentFetch] ${path} → HTTP ${res.status}`);
-      return [];
+      console.error(`[callAgent] ${path} → HTTP ${res.status}`);
+      return null;
     }
 
     const text = await res.text();
 
+    if (!text) return null;
+
     // Guard against HTML error pages (Cloudflare / unhandled DO exceptions)
     if (text.trimStart().startsWith("<")) {
-      console.error(`[agentFetch] ${path} → received HTML (DO error page)`);
-      return [];
+      console.error(`[callAgent] ${path} → received HTML (DO error page)`);
+      return null;
     }
 
-    if (!text) return [];
-
-    return JSON.parse(text) as unknown[];
+    return JSON.parse(text) as T;
   } catch (e) {
-    console.error(`[agentFetch] ${path} → error:`, e);
-    return [];
+    console.error(`[callAgent] ${path} → error:`, e);
+    return null;
   }
+}
+
+/** Backwards-compatible array wrapper — returns [] on any failure. */
+export async function agentFetch(
+  stub: DurableObjectStub,
+  path: string,
+  body: unknown,
+  room = "global"
+): Promise<unknown[]> {
+  const result = await callAgent<unknown[]>(stub, path, body, room);
+  return result ?? [];
 }

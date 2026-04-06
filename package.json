@@ -11,14 +11,15 @@
     "preview": "wrangler dev"
   },
   "dependencies": {
-    "agents": "^0.9.0",
+    "@cloudflare/puppeteer": "^1.0.6",
     "@modelcontextprotocol/sdk": "^1.10.2",
-    "zod": "^3.24.2",
+    "agents": "^0.9.0",
     "hono": "^4.7.7",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "jspdf": "^4.2.1",
-    "html2canvas": "^1.4.1"
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.4.0",

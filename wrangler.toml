@@ -7,10 +7,14 @@ account_id = "693ae9c587f1f2c34328bb47447366b0"
 [ai]
 binding = "AI"
 
+[browser]
+binding = "BROWSER"
+
 [durable_objects]
 bindings = [
   { name = "BRIEFLY_AGENT", class_name = "BrieflyAgent" },
-  { name = "SCRAPER_AGENT", class_name = "ScraperAgent" }
+  { name = "SCRAPER_AGENT", class_name = "ScraperAgent" },
+  { name = "CRAWLER_AGENT", class_name = "CrawlerAgent" }
 ]
 
 [[migrations]]
@@ -20,6 +24,10 @@ new_sqlite_classes = ["BrieflyAgent", "ScraperAgent", "BrieflyMcpAgent"]
 [[migrations]]
 tag = "v2"
 deleted_classes = ["BrieflyMcpAgent"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["CrawlerAgent"]
 
 # KV namespace for A2A task storage
 # Create with: wrangler kv namespace create A2A_TASKS

@@ -21,10 +21,11 @@ import { buildAgentCard } from "./a2a/agentCard";
 import { a2aRouter } from "./a2a/handler";
 import { BrieflyAgent } from "./agents/BrieflyAgent";
 import { ScraperAgent } from "./agents/ScraperAgent";
+import { CrawlerAgent } from "./agents/CrawlerAgent";
 import { createBrieflyMcpServer } from "./mcp/server";
 
 // Re-export Durable Object classes for Wrangler binding
-export { BrieflyAgent, ScraperAgent };
+export { BrieflyAgent, ScraperAgent, CrawlerAgent };
 
 const app = new Hono<{ Bindings: Env }>();
 

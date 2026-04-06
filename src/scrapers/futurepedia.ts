@@ -1,10 +1,18 @@
 /**
- * Futurepedia.io scraper using HTMLRewriter.
- * Falls back to sitemap if HTML scraping yields no results.
+ * Futurepedia.io scraper.
+ *
+ * Uses CrawlerAgent (headless Chromium) to render the JS-driven SPA,
+ * then parses JSON-LD structured data and tool card HTML patterns.
+ *
+ * Fallback chain:
+ *   1. CrawlerAgent headless render (most reliable for JS SPAs)
+ *   2. Plain fetch + JSON-LD / HTML pattern extraction
+ *   3. Sitemap-based URL extraction
  */
 
-import { ScrapedItem } from "../types";
+import type { Env, ScrapedItem } from "../types";
 import { getBrowserHeaders } from "../utils/userAgents";
+import { callAgent } from "../utils/agentFetch";
 import { truncate, stripHtml } from "../utils/htmlParser";
 import { createItemId } from "./index";
 
@@ -17,60 +25,56 @@ interface ToolEntry {
   tags: string[];
 }
 
-async function scrapeToolsPage(): Promise<ToolEntry[]> {
+/** Use headless Chromium via CrawlerAgent to render the SPA. */
+async function crawlFuturepedia(env: Env): Promise<string | null> {
+  const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
+  return callAgent<string>(stub, "/call/renderPage", {
+    url: BASE_URL,
+    waitFor: "[class*='tool'], article, .card, [data-testid]",
+    timeout: 25_000,
+  });
+}
+
+/** Parse tools from fully-rendered HTML. */
+function parseToolsFromHtml(html: string): ToolEntry[] {
   const tools: ToolEntry[] = [];
 
-  try {
-    const response = await fetch(BASE_URL, {
-      headers: getBrowserHeaders(BASE_URL),
-      redirect: "follow",
-    });
-
-    if (!response.ok) return [];
-
-    // Collect structured data from script tags (JSON-LD)
-    const html = await response.text();
-
-    // Try JSON-LD first
-    const jsonLdMatches = html.matchAll(
-      /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-    );
-    for (const match of jsonLdMatches) {
-      try {
-        const data = JSON.parse(match[1]);
-        if (Array.isArray(data["@graph"])) {
-          for (const item of data["@graph"]) {
-            if (item["@type"] === "SoftwareApplication" && item.name) {
-              tools.push({
-                title: item.name,
-                description: item.description || "",
-                url: item.url || item["@id"] || BASE_URL,
-                tags: item.applicationCategory ? [item.applicationCategory] : ["AI Tool"],
-              });
-            }
+  // Try JSON-LD first (structured data)
+  const jsonLdMatches = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+  for (const match of jsonLdMatches) {
+    try {
+      const data = JSON.parse(match[1]);
+      if (Array.isArray(data["@graph"])) {
+        for (const item of data["@graph"]) {
+          if (item["@type"] === "SoftwareApplication" && item.name) {
+            tools.push({
+              title: item.name,
+              description: item.description || "",
+              url: item.url || item["@id"] || BASE_URL,
+              tags: item.applicationCategory ? [item.applicationCategory] : ["AI Tool"],
+            });
           }
         }
-      } catch {
-        // Not valid JSON, skip
       }
+    } catch {
+      // Not valid JSON, skip
     }
+  }
 
-    // Fallback: extract from common HTML patterns
-    if (tools.length === 0) {
-      // Extract tool cards via regex patterns common in Next.js apps
-      const cardPattern =
-        /href=["'](\/ai-tools\/[^"']+)["'][^>]*>[\s\S]{0,500}?<[^>]*class[^>]*title[^>]*>([\s\S]*?)<\/[^>]+>/gi;
-      let m: RegExpExecArray | null;
-      while ((m = cardPattern.exec(html)) !== null && tools.length < 20) {
-        const url = `${BASE_URL}${m[1]}`;
-        const title = stripHtml(m[2]).trim();
-        if (title && title.length > 2) {
-          tools.push({ title, description: "", url, tags: ["AI Tool"] });
-        }
-      }
+  if (tools.length > 0) return tools;
+
+  // Fallback: extract tool cards via regex patterns
+  const cardPattern =
+    /href=["'](\/ai-tools\/[^"']+)["'][^>]*>[\s\S]{0,500}?<[^>]*class[^>]*title[^>]*>([\s\S]*?)<\/[^>]+>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = cardPattern.exec(html)) !== null && tools.length < 20) {
+    const url = `${BASE_URL}${m[1]}`;
+    const title = stripHtml(m[2]).trim();
+    if (title && title.length > 2) {
+      tools.push({ title, description: "", url, tags: ["AI Tool"] });
     }
-  } catch {
-    // Network error — return empty
   }
 
   return tools;
@@ -110,8 +114,32 @@ async function scrapeViaSitemap(): Promise<ToolEntry[]> {
   return tools;
 }
 
-export async function scrapeFuturepedia(): Promise<ScrapedItem[]> {
-  let tools = await scrapeToolsPage();
+export async function scrapeFuturepedia(env: Env): Promise<ScrapedItem[]> {
+  let html: string | null = null;
+
+  // 1. Try headless render via CrawlerAgent
+  html = await crawlFuturepedia(env);
+
+  // 2. Fallback: plain fetch
+  if (!html) {
+    try {
+      const res = await fetch(BASE_URL, {
+        headers: getBrowserHeaders(BASE_URL),
+        redirect: "follow",
+      });
+      if (res.ok) html = await res.text();
+    } catch {
+      // ignore
+    }
+  }
+
+  let tools: ToolEntry[] = [];
+
+  if (html) {
+    tools = parseToolsFromHtml(html);
+  }
+
+  // 3. Last resort: sitemap
   if (tools.length === 0) {
     tools = await scrapeViaSitemap();
   }

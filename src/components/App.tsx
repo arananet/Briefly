@@ -22,6 +22,8 @@ export function App() {
     try {
       const res = await fetch("/api/feed?limit=50");
       if (res.ok) {
+        const ct = res.headers.get("content-type") ?? "";
+        if (!ct.includes("application/json")) return;
         const data = (await res.json()) as ScrapedItem[];
         setFeedItems(data);
       }

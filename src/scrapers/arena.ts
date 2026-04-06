@@ -1,27 +1,21 @@
 /**
- * Model leaderboard scraper.
+ * Arena.ai model leaderboard scraper.
  *
- * Primary:  Hugging Face Open LLM Leaderboard (public JSON API)
- * Fallback: Arena.ai page HTML parsing
+ * Uses CrawlerAgent (headless Chromium) to render the JS-driven SPA,
+ * then parses the fully-rendered HTML table and __NEXT_DATA__ payload.
  *
- * Arena.ai's leaderboard page is a JS-rendered SPA and frequently blocks
- * Cloudflare IPs. The HF leaderboard dataset is a reliable public API
- * with no authentication required.
+ * Fallback chain:
+ *   1. CrawlerAgent headless render (most reliable)
+ *   2. Plain fetch + __NEXT_DATA__ extraction
+ *   3. Plain fetch + table regex parsing
  */
 
-import { ScrapedItem } from "../types";
-import { getBrowserHeaders, getApiHeaders } from "../utils/userAgents";
+import type { Env, ScrapedItem } from "../types";
+import { getBrowserHeaders } from "../utils/userAgents";
+import { callAgent } from "../utils/agentFetch";
 import { createItemId } from "./index";
 
 const ARENA_URL = "https://arena.ai/leaderboard/text";
-
-// Hugging Face Open LLM Leaderboard dataset — publicly accessible JSON
-const HF_LEADERBOARD_API =
-  "https://huggingface.co/datasets/open-llm-leaderboard/results/resolve/main/results.json";
-
-// Alternative: HF spaces API for the leaderboard
-const HF_SPACES_API =
-  "https://open-llm-leaderboard-open-llm-leaderboard.hf.space/api/leaderboard";
 
 interface LeaderboardEntry {
   rank: number;
@@ -30,130 +24,106 @@ interface LeaderboardEntry {
   score: string;
 }
 
-/** Try the HF Open LLM Leaderboard via their dataset API */
-async function fetchHFLeaderboard(): Promise<LeaderboardEntry[]> {
-  // HF Spaces API for the Open LLM Leaderboard
-  try {
-    const res = await fetch(HF_SPACES_API, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; BrieflyBot/1.0)",
-      },
-    });
-    if (!res.ok) return [];
-    const data = (await res.json()) as unknown;
-    if (!Array.isArray(data)) return [];
+/** Use headless Chromium via CrawlerAgent to render the SPA. */
+async function crawlArena(env: Env): Promise<string | null> {
+  const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
+  return callAgent<string>(stub, "/call/renderPage", {
+    url: ARENA_URL,
+    waitFor: "table, [class*='leaderboard'], [class*='ranking']",
+    timeout: 25_000,
+  });
+}
 
-    return (data as Record<string, unknown>[])
-      .slice(0, 20)
-      .map((row, i) => {
-        const name =
-          String(row["model_name"] || row["name"] || row["model"] || `Model ${i + 1}`);
-        const score =
-          String(row["average"] || row["score"] || row["total"] || row["elo"] || "N/A");
-        const org = name.includes("/") ? name.split("/")[0] : "Unknown";
-        const modelName = name.includes("/") ? name.split("/").slice(1).join("/") : name;
-        return {
-          rank: i + 1,
-          model: modelName,
-          provider: org,
-          score,
-        };
+/** Try to extract leaderboard from __NEXT_DATA__ embedded JSON. */
+function parseNextData(html: string): LeaderboardEntry[] {
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return [];
+  try {
+    const data = JSON.parse(m[1]);
+    return findLeaderboard(data) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Parse an HTML table for model rankings. */
+function parseTableHtml(html: string): LeaderboardEntry[] {
+  const entries: LeaderboardEntry[] = [];
+  const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let rank = 1;
+  let match: RegExpExecArray | null;
+
+  while ((match = rowPattern.exec(html)) !== null && entries.length < 25) {
+    const cells = extractCells(match[1]);
+    if (cells.length < 2) continue;
+    const modelCell = cells[0] ?? "";
+    const scoreCell = cells[cells.length - 1] ?? "";
+    if (!modelCell || modelCell.toLowerCase().includes("model")) continue;
+
+    const [provider, ...parts] = modelCell.includes("/")
+      ? modelCell.split("/")
+      : ["Unknown", modelCell];
+
+    entries.push({
+      rank,
+      model: (parts.join("/") || modelCell).trim(),
+      provider: provider.trim(),
+      score: scoreCell.trim(),
+    });
+    rank++;
+  }
+  return entries;
+}
+
+export async function scrapeArena(env: Env): Promise<ScrapedItem[]> {
+  let html: string | null = null;
+
+  // 1. Try headless render via CrawlerAgent
+  html = await crawlArena(env);
+
+  // 2. Fallback: plain fetch
+  if (!html) {
+    try {
+      const res = await fetch(ARENA_URL, {
+        headers: getBrowserHeaders(ARENA_URL),
+        redirect: "follow",
       });
-  } catch {
-    return [];
-  }
-}
-
-/** Fallback: try to parse Arena.ai HTML */
-async function fetchArenaHtml(): Promise<LeaderboardEntry[]> {
-  try {
-    const response = await fetch(ARENA_URL, {
-      headers: getBrowserHeaders(ARENA_URL),
-      redirect: "follow",
-    });
-
-    if (!response.ok) return [];
-
-    const html = await response.text();
-    if (html.trimStart().startsWith("<!DOCTYPE") && html.includes("_app")) {
-      // SPA shell returned — no useful data
-      return [];
+      if (res.ok) html = await res.text();
+    } catch {
+      // ignore
     }
-
-    // Try __NEXT_DATA__
-    const nextDataMatch = html.match(
-      /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/
-    );
-    if (nextDataMatch) {
-      try {
-        const nextData = JSON.parse(nextDataMatch[1]);
-        const entries = findLeaderboard(nextData);
-        if (entries && entries.length > 0) return entries;
-      } catch {
-        // fall through
-      }
-    }
-
-    // Try table parsing
-    const entries: LeaderboardEntry[] = [];
-    const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let rank = 1;
-    let match: RegExpExecArray | null;
-    while ((match = rowPattern.exec(html)) !== null && entries.length < 20) {
-      const cells = extractTableCells(match[1]);
-      if (cells.length >= 2) {
-        const modelCell = cells[0] || "";
-        const scoreCell = cells[cells.length - 1] || "";
-        if (modelCell && !modelCell.toLowerCase().includes("model")) {
-          const [provider, ...parts] = modelCell.includes("/")
-            ? modelCell.split("/")
-            : ["Unknown", modelCell];
-          entries.push({
-            rank,
-            model: (parts.join("/") || modelCell).trim(),
-            provider: provider.trim(),
-            score: scoreCell.trim(),
-          });
-          rank++;
-        }
-      }
-    }
-    return entries;
-  } catch {
-    return [];
   }
-}
 
-export async function scrapeArena(): Promise<ScrapedItem[]> {
-  // Try HF leaderboard first (more reliable), fall back to Arena.ai HTML
-  let entries = await fetchHFLeaderboard();
-  if (entries.length === 0) {
-    entries = await fetchArenaHtml();
-  }
+  if (!html) return [];
+
+  // Parse: __NEXT_DATA__ first, then table regex
+  let entries = parseNextData(html);
+  if (entries.length === 0) entries = parseTableHtml(html);
   if (entries.length === 0) return [];
 
   const now = new Date().toISOString();
-  return entries.slice(0, 20).map((entry) => ({
-    id: createItemId("arena", `rank-${entry.rank}-${entry.model}`),
+  return entries.slice(0, 20).map((e) => ({
+    id: createItemId("arena", `rank-${e.rank}-${e.model}`),
     source: "arena" as const,
     sourceUrl: ARENA_URL,
-    title: `#${entry.rank} ${entry.model}`,
-    summary: `${entry.provider} · Score: ${entry.score} · Rank #${entry.rank}`,
+    title: `#${e.rank} ${e.model}`,
+    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on Arena.ai leaderboard`,
     url: ARENA_URL,
     category: "leaderboard" as const,
-    tags: [entry.provider, "AI Model", "Leaderboard"],
+    tags: [e.provider, "AI Model", "Leaderboard"],
     publishedAt: now,
     scrapedAt: now,
   }));
 }
 
-function extractTableCells(rowHtml: string): string[] {
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function extractCells(rowHtml: string): string[] {
   const cells: string[] = [];
-  const cellPattern = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = cellPattern.exec(rowHtml)) !== null) {
-    cells.push(match[1].replace(/<[^>]+>/g, "").trim());
+  const p = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = p.exec(rowHtml)) !== null) {
+    cells.push(m[1].replace(/<[^>]+>/g, "").trim());
   }
   return cells;
 }

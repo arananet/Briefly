@@ -47,7 +47,7 @@ export class ScraperAgent extends Agent<Env, ScraperState> {
 
   @callable()
   async scrapeAll(): Promise<{ count: number; scrapedAt: string }> {
-    const items = await scrapeAllSources();
+    const items = await scrapeAllSources(this.env);
     const now = new Date().toISOString();
 
     for (const item of items) {
