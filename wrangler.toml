@@ -15,7 +15,11 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["BrieflyAgent", "ScraperAgent"]
+new_sqlite_classes = ["BrieflyAgent", "ScraperAgent", "BrieflyMcpAgent"]
+
+[[migrations]]
+tag = "v2"
+deleted_classes = ["BrieflyMcpAgent"]
 
 # KV namespace for A2A task storage
 # Create with: wrangler kv namespace create A2A_TASKS
