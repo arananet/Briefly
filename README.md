@@ -1,8 +1,7 @@
-# Briefly
+# Briefly: A Multi-Protocol Nano Agent powered by Gemma 4.
+### The Edge-native intelligence layer for creative agencies.
 
-**AI-powered innovation intelligence for creative agencies — a nano agent.**
-
-> Briefly is a minimal, purpose-built AI agent deployed on Cloudflare's edge. It monitors the AI industry in real-time and makes that intelligence available to humans via chat, to AI assistants via MCP, and to other agents via A2A.
+> Briefly monitors the AI industry in real-time and makes that intelligence available to humans via chat, to AI assistants via MCP, and to other agents via A2A.
 
 ---
 
