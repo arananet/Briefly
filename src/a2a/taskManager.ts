@@ -7,7 +7,11 @@
  */
 
 import type { A2ATask, A2ATaskStatus, A2APushConfig, Env, ScrapedItem } from "../types";
-import { agentFetch } from "../utils/agentFetch";
+import { scrapeArena } from "../scrapers/arena";
+import { scrapeFuturepedia } from "../scrapers/futurepedia";
+import { scrapeProductHunt } from "../scrapers/producthunt";
+import { scrapeTheRundown, scrapeTheNeuron } from "../scrapers/rss";
+import { filterItems } from "../scrapers/index";
 
 const TTL_SECONDS = 86400; // 24 hours
 
@@ -82,53 +86,56 @@ export async function computeSkillOutput(
   input: unknown,
   env: Env
 ): Promise<unknown> {
-  const scraperStub = env.SCRAPER_AGENT.get(
-    env.SCRAPER_AGENT.idFromName("global")
-  );
-
   switch (skill) {
     case "search_tools": {
-      const inp = input as { query?: string; category?: string; limit?: number };
-      const results = await agentFetch(scraperStub, "/call/queryItems", {
-        query: inp.query || undefined,
-        category: inp.category === "any" ? undefined : (inp.category ?? "tool"),
-        limit: inp.limit ?? 10,
-      });
+      const inp = input as { query?: string; limit?: number };
+      const [futurepedia, producthunt] = await Promise.all([
+        scrapeFuturepedia(env).catch(() => [] as ScrapedItem[]),
+        scrapeProductHunt().catch(() => [] as ScrapedItem[]),
+      ]);
+      const all = [...futurepedia, ...producthunt];
+      const results = filterItems(all, { query: inp.query, limit: inp.limit ?? 10 });
       return results.length > 0
         ? results
-        : { message: "No tools found yet. The scraper may still be populating data — check back in a minute." };
+        : { message: "No tools found. Both Futurepedia and Product Hunt were scraped live." };
     }
 
     case "industry_summary": {
       const inp = input as { source?: string; limit?: number };
-      const results = await agentFetch(scraperStub, "/call/queryItems", {
-        category: "news",
-        source: inp.source === "all" ? undefined : inp.source,
-        limit: inp.limit ?? 10,
-      });
-      return results.length > 0
-        ? results
-        : { message: "No news available yet. The scraper may still be populating data — check back in a minute." };
+      const [rundown, neuron] = await Promise.all([
+        scrapeTheRundown().catch(() => [] as ScrapedItem[]),
+        scrapeTheNeuron().catch(() => [] as ScrapedItem[]),
+      ]);
+      const all = [...rundown, ...neuron];
+      const filtered = inp.source && inp.source !== "all"
+        ? all.filter((i) => i.source === inp.source)
+        : all;
+      return filtered.slice(0, inp.limit ?? 10).length > 0
+        ? filtered.slice(0, inp.limit ?? 10)
+        : { message: "No news fetched — RSS feeds may be temporarily unavailable." };
     }
 
     case "model_leaderboard": {
       const inp = input as { limit?: number };
-      const results = await agentFetch(scraperStub, "/call/queryItems", {
-        category: "leaderboard",
-        limit: inp.limit ?? 10,
-      });
-      return results.length > 0
-        ? results
-        : { message: "Leaderboard data not available yet. The scraper may still be populating — check back in a minute." };
+      const results = await scrapeArena(env).catch(() => [] as ScrapedItem[]);
+      return results.slice(0, inp.limit ?? 10).length > 0
+        ? results.slice(0, inp.limit ?? 10)
+        : { message: "Leaderboard sources unreachable — please try again." };
     }
 
     case "generate_brief": {
       const inp = input as { topic?: string; query?: string };
       const topic = inp.topic || inp.query || "AI industry";
       const [tools, news, leaderboard] = await Promise.all([
-        agentFetch(scraperStub, "/call/queryItems", { query: topic, category: "tool", limit: 5 }),
-        agentFetch(scraperStub, "/call/queryItems", { category: "news", limit: 5 }),
-        agentFetch(scraperStub, "/call/queryItems", { category: "leaderboard", limit: 5 }),
+        Promise.all([
+          scrapeFuturepedia(env).catch(() => [] as ScrapedItem[]),
+          scrapeProductHunt().catch(() => [] as ScrapedItem[]),
+        ]).then(([f, p]) => filterItems([...f, ...p], { query: topic, limit: 5 })),
+        Promise.all([
+          scrapeTheRundown().catch(() => [] as ScrapedItem[]),
+          scrapeTheNeuron().catch(() => [] as ScrapedItem[]),
+        ]).then(([r, n]) => [...r, ...n].slice(0, 5)),
+        scrapeArena(env).catch(() => [] as ScrapedItem[]).then((r) => r.slice(0, 5)),
       ]);
 
       let aiSummary = "";

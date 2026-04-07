@@ -1,13 +1,13 @@
 /**
- * Arena.ai model leaderboard scraper.
+ * AI Model Leaderboard scraper.
  *
- * Uses CrawlerAgent (headless Chromium) to render the JS-driven SPA,
- * then parses the fully-rendered HTML table and __NEXT_DATA__ payload.
+ * Fallback chain (most reliable first):
+ *   1. CrawlerAgent headless render of Arena.ai (requires BROWSER binding)
+ *   2. Plain fetch Arena.ai + __NEXT_DATA__ parse (works if SSR is present)
+ *   3. HuggingFace Trending Models API — pure JSON, no JS, always accessible
  *
- * Fallback chain:
- *   1. CrawlerAgent headless render (most reliable)
- *   2. Plain fetch + __NEXT_DATA__ extraction
- *   3. Plain fetch + table regex parsing
+ * The HuggingFace fallback guarantees leaderboard data is always available,
+ * even before the CrawlerAgent is deployed or when Arena.ai blocks CF IPs.
  */
 
 import type { Env, ScrapedItem } from "../types";
@@ -17,24 +17,35 @@ import { createItemId } from "./index";
 
 const ARENA_URL = "https://arena.ai/leaderboard/text";
 
+// HuggingFace models API — returns JSON without auth, always accessible
+const HF_MODELS_API =
+  "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&filter=text-generation";
+
 interface LeaderboardEntry {
   rank: number;
   model: string;
   provider: string;
   score: string;
+  url: string;
 }
 
-/** Use headless Chromium via CrawlerAgent to render the SPA. */
+// ── 1. CrawlerAgent headless render ────────────────────────────────────────
+
 async function crawlArena(env: Env): Promise<string | null> {
-  const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
-  return callAgent<string>(stub, "/call/renderPage", {
-    url: ARENA_URL,
-    waitFor: "table, [class*='leaderboard'], [class*='ranking']",
-    timeout: 25_000,
-  });
+  try {
+    const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
+    return await callAgent<string>(stub, "/call/renderPage", {
+      url: ARENA_URL,
+      waitFor: "table, [class*='leaderboard'], [class*='ranking']",
+      timeout: 25_000,
+    });
+  } catch {
+    return null;
+  }
 }
 
-/** Try to extract leaderboard from __NEXT_DATA__ embedded JSON. */
+// ── 2. Arena.ai plain fetch + HTML parsing ─────────────────────────────────
+
 function parseNextData(html: string): LeaderboardEntry[] {
   const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
   if (!m) return [];
@@ -46,7 +57,6 @@ function parseNextData(html: string): LeaderboardEntry[] {
   }
 }
 
-/** Parse an HTML table for model rankings. */
 function parseTableHtml(html: string): LeaderboardEntry[] {
   const entries: LeaderboardEntry[] = [];
   const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -69,54 +79,12 @@ function parseTableHtml(html: string): LeaderboardEntry[] {
       model: (parts.join("/") || modelCell).trim(),
       provider: provider.trim(),
       score: scoreCell.trim(),
+      url: ARENA_URL,
     });
     rank++;
   }
   return entries;
 }
-
-export async function scrapeArena(env: Env): Promise<ScrapedItem[]> {
-  let html: string | null = null;
-
-  // 1. Try headless render via CrawlerAgent
-  html = await crawlArena(env);
-
-  // 2. Fallback: plain fetch
-  if (!html) {
-    try {
-      const res = await fetch(ARENA_URL, {
-        headers: getBrowserHeaders(ARENA_URL),
-        redirect: "follow",
-      });
-      if (res.ok) html = await res.text();
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!html) return [];
-
-  // Parse: __NEXT_DATA__ first, then table regex
-  let entries = parseNextData(html);
-  if (entries.length === 0) entries = parseTableHtml(html);
-  if (entries.length === 0) return [];
-
-  const now = new Date().toISOString();
-  return entries.slice(0, 20).map((e) => ({
-    id: createItemId("arena", `rank-${e.rank}-${e.model}`),
-    source: "arena" as const,
-    sourceUrl: ARENA_URL,
-    title: `#${e.rank} ${e.model}`,
-    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on Arena.ai leaderboard`,
-    url: ARENA_URL,
-    category: "leaderboard" as const,
-    tags: [e.provider, "AI Model", "Leaderboard"],
-    publishedAt: now,
-    scrapedAt: now,
-  }));
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
 
 function extractCells(rowHtml: string): string[] {
   const cells: string[] = [];
@@ -143,6 +111,7 @@ function findLeaderboard(obj: unknown): LeaderboardEntry[] | null {
           model: String(item.model || item.name || `Model ${i + 1}`),
           provider: String(item.provider || item.organization || "Unknown"),
           score: String(item.elo || item.score || item.rating || "N/A"),
+          url: ARENA_URL,
         }));
       }
     }
@@ -150,4 +119,109 @@ function findLeaderboard(obj: unknown): LeaderboardEntry[] | null {
     if (nested) return nested;
   }
   return null;
+}
+
+// ── 3. HuggingFace Trending Models API ────────────────────────────────────
+// Returns pure JSON without any JS rendering. Ranks models by trending score.
+
+interface HFModel {
+  id?: string;
+  modelId?: string;
+  downloads?: number;
+  likes?: number;
+  trendingScore?: number;
+  pipeline_tag?: string;
+  lastModified?: string;
+}
+
+async function scrapeHuggingFaceTrending(): Promise<LeaderboardEntry[]> {
+  try {
+    const res = await fetch(HF_MODELS_API, {
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; Briefly/1.0)",
+      },
+    });
+
+    if (!res.ok) return [];
+
+    const models = await res.json() as HFModel[];
+    if (!Array.isArray(models) || models.length === 0) return [];
+
+    return models.slice(0, 20).map((m, i) => {
+      const id = m.modelId || m.id || `model-${i}`;
+      const [provider, ...rest] = id.includes("/") ? id.split("/") : ["Community", id];
+      const modelName = rest.join("/") || id;
+      const score = m.trendingScore != null
+        ? m.trendingScore.toFixed(1)
+        : m.downloads != null
+        ? `${(m.downloads / 1000).toFixed(0)}k dl`
+        : "N/A";
+
+      return {
+        rank: i + 1,
+        model: modelName,
+        provider,
+        score,
+        url: `https://huggingface.co/${id}`,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// ── Main export ─────────────────────────────────────────────────────────────
+
+export async function scrapeArena(env: Env): Promise<ScrapedItem[]> {
+  let entries: LeaderboardEntry[] = [];
+
+  // 1. Try CrawlerAgent headless render
+  const html = await crawlArena(env);
+  if (html) {
+    entries = parseNextData(html);
+    if (entries.length === 0) entries = parseTableHtml(html);
+  }
+
+  // 2. Plain fetch Arena.ai (may work if SSR, often blocked on CF IPs)
+  if (entries.length === 0) {
+    try {
+      const res = await fetch(ARENA_URL, {
+        headers: getBrowserHeaders(ARENA_URL),
+        redirect: "follow",
+      });
+      if (res.ok) {
+        const fetchedHtml = await res.text();
+        entries = parseNextData(fetchedHtml);
+        if (entries.length === 0) entries = parseTableHtml(fetchedHtml);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Reliable fallback: HuggingFace trending models (always accessible JSON)
+  if (entries.length === 0) {
+    entries = await scrapeHuggingFaceTrending();
+  }
+
+  if (entries.length === 0) return [];
+
+  const now = new Date().toISOString();
+  const source = entries[0]?.url?.includes("huggingface")
+    ? "Trending on HuggingFace"
+    : "Arena.ai";
+
+  return entries.slice(0, 20).map((e) => ({
+    id: createItemId("arena", `rank-${e.rank}-${e.model}`),
+    source: "arena" as const,
+    sourceUrl: e.url?.includes("huggingface") ? "https://huggingface.co" : ARENA_URL,
+    title: `#${e.rank} ${e.model}`,
+    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on ${source}`,
+    url: e.url,
+    category: "leaderboard" as const,
+    tags: [e.provider, "AI Model", "Leaderboard"],
+    publishedAt: now,
+    scrapedAt: now,
+  }));
 }

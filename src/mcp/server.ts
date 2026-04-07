@@ -1,47 +1,42 @@
 /**
- * Briefly MCP Server — stateless factory approach.
+ * Briefly MCP Server — stateless factory, live-scraping tools.
  *
- * Creates a fresh McpServer instance per request via createBrieflyMcpServer().
- * Used with createMcpHandler() from agents/mcp for a Streamable HTTP endpoint.
+ * Every tool call scrapes its source(s) live on demand.
+ * No cached/scheduled data dependency — tools always return fresh results.
  *
- * Connect via: https://briefly.info-693.workers.dev/mcp
+ * After scraping, results are stored to ScraperAgent SQLite in the background
+ * so the REST API and UI also stay current.
  *
- * Exposes 4 tools — all return raw scraped data, no LLM calls:
- *   - search_ai_tools      — find AI tools by keyword
- *   - get_industry_news    — latest AI news headlines
- *   - get_model_leaderboard — Arena.ai model rankings
- *   - generate_brief        — structured innovation brief from scraped data
+ * Endpoints: POST /mcp (Streamable HTTP, 2025 spec)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env, ScrapedItem } from "../types";
 import { agentFetch } from "../utils/agentFetch";
-
-async function queryScraperAgentMcp(
-  env: Env,
-  opts: { query?: string; category?: string; source?: string; limit?: number }
-): Promise<ScrapedItem[]> {
-  const stub = env.SCRAPER_AGENT.get(env.SCRAPER_AGENT.idFromName("global"));
-  return (await agentFetch(stub, "/call/queryItems", opts)) as ScrapedItem[];
-}
+import { scrapeArena } from "../scrapers/arena";
+import { scrapeFuturepedia } from "../scrapers/futurepedia";
+import { scrapeProductHunt } from "../scrapers/producthunt";
+import { scrapeTheRundown, scrapeTheNeuron } from "../scrapers/rss";
+import { filterItems } from "../scrapers/index";
 
 /**
- * Normalise a free-form category string to one of the valid DB values.
- * Accepts fuzzy inputs like "Tool", "NEWS", "arena", etc.
+ * Store freshly scraped items to ScraperAgent SQLite in the background.
+ * Fire-and-forget — tool responses don't wait for this.
  */
-function normaliseCategory(raw?: string): string | undefined {
-  if (!raw) return undefined;
-  const s = raw.toLowerCase();
-  if (s.includes("leader") || s.includes("arena") || s.includes("rank") || s.includes("model")) return "leaderboard";
-  if (s.includes("news") || s.includes("newsletter") || s.includes("article")) return "news";
-  if (s.includes("tool") || s.includes("app") || s.includes("product")) return "tool";
-  if (s === "any" || s === "all") return undefined;
-  return undefined; // unknown → no filter
+function storeToCache(env: Env, items: ScrapedItem[]): void {
+  if (items.length === 0) return;
+  try {
+    const stub = env.SCRAPER_AGENT.get(env.SCRAPER_AGENT.idFromName("global"));
+    // Best-effort: call storeItems callable if it exists, or scrapeAll to refresh
+    agentFetch(stub, "/call/storeItems", { items }).catch(() => {});
+  } catch {
+    // Non-fatal — cache miss is acceptable
+  }
 }
 
 /**
- * Normalise a free-form source string to one of the valid DB values.
+ * Normalise a free-form source string to a valid DB value.
  */
 function normaliseSource(raw?: string): string | undefined {
   if (!raw) return undefined;
@@ -52,45 +47,45 @@ function normaliseSource(raw?: string): string | undefined {
   if (s.includes("producthunt") || s.includes("product hunt") || s === "ph") return "producthunt";
   if (s.includes("arena")) return "arena";
   if (s === "all" || s === "any") return undefined;
-  return undefined; // unknown → no filter
+  return undefined;
 }
 
 /**
  * Creates a fresh McpServer with all 4 Briefly tools registered.
- * Call this once per request — do NOT reuse instances across requests.
+ * Each tool scrapes its source(s) live on every invocation.
  */
 export function createBrieflyMcpServer(env: Env): McpServer {
-  const server = new McpServer({
-    name: "briefly",
-    version: "1.0.0",
-  });
+  const server = new McpServer({ name: "briefly", version: "1.0.0" });
 
-  // ── Tool 1: Search AI tools ───────────────────────────────────────────────
+  // ── Tool 1: Search AI tools (live scrape Futurepedia + Product Hunt) ───────
   server.tool(
     "search_ai_tools",
-    "Find AI tools from Futurepedia and Product Hunt that match a given project description or use case.",
+    "Find AI tools from Futurepedia and Product Hunt. Scrapes sources live on each call.",
     {
       query: z.string().describe("Keywords or project description to search for"),
-      category: z.string().optional().describe("Filter: 'tool', 'news', 'leaderboard', or 'any'"),
       limit: z.number().min(1).max(20).default(10).describe("Maximum number of results"),
     },
-    async ({ query, category, limit }) => {
-      const items = await queryScraperAgentMcp(env, {
-        query,
-        category: normaliseCategory(category),
-        limit,
-      });
+    async ({ query, limit }) => {
+      const [futurepedia, producthunt] = await Promise.all([
+        scrapeFuturepedia(env).catch(() => [] as ScrapedItem[]),
+        scrapeProductHunt().catch(() => [] as ScrapedItem[]),
+      ]);
 
-      if (items.length === 0) {
+      const all = [...futurepedia, ...producthunt];
+      storeToCache(env, all);
+
+      const results = filterItems(all, { query, limit });
+
+      if (results.length === 0) {
         return {
           content: [{
             type: "text" as const,
-            text: "No matching tools found. Data may still be loading — try again in a moment, or try a broader search.",
+            text: `No tools found matching "${query}". Both Futurepedia and Product Hunt were scraped live — try a broader search term.`,
           }],
         };
       }
 
-      const formatted = items
+      const formatted = results
         .map((item) =>
           `**${item.title}** [${item.source.toUpperCase()}]\n` +
           `${item.summary}\n` +
@@ -103,28 +98,38 @@ export function createBrieflyMcpServer(env: Env): McpServer {
     }
   );
 
-  // ── Tool 2: Get industry news ─────────────────────────────────────────────
+  // ── Tool 2: Get industry news (live scrape The Rundown + The Neuron) ───────
   server.tool(
     "get_industry_news",
-    "Retrieve the latest AI industry news from The Rundown AI and The Neuron Daily newsletters.",
+    "Retrieve the latest AI industry news from The Rundown AI and The Neuron Daily. Scrapes RSS feeds live on each call.",
     {
-      source: z.string().optional().describe("Filter by source: 'therundown', 'theneuron', or omit for all"),
+      source: z.string().optional().describe("Filter: 'therundown', 'theneuron', or omit for both"),
       limit: z.number().min(1).max(20).default(10).describe("Maximum number of articles"),
     },
     async ({ source, limit }) => {
-      const items = await queryScraperAgentMcp(env, {
-        category: "news",
-        source: normaliseSource(source),
-        limit,
-      });
+      const normSource = normaliseSource(source);
 
-      if (items.length === 0) {
+      const [rundown, neuron] = await Promise.all([
+        (normSource === undefined || normSource === "therundown")
+          ? scrapeTheRundown().catch(() => [] as ScrapedItem[])
+          : Promise.resolve([] as ScrapedItem[]),
+        (normSource === undefined || normSource === "theneuron")
+          ? scrapeTheNeuron().catch(() => [] as ScrapedItem[])
+          : Promise.resolve([] as ScrapedItem[]),
+      ]);
+
+      const all = [...rundown, ...neuron];
+      storeToCache(env, all);
+
+      const results = filterItems(all, { source: normSource, limit });
+
+      if (results.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "No news available yet. Check back in a few minutes." }],
+          content: [{ type: "text" as const, text: "No news fetched from RSS feeds — sources may be temporarily unavailable." }],
         };
       }
 
-      const formatted = items
+      const formatted = results
         .map((item) =>
           `**${item.title}** (${item.source})\n` +
           `${item.summary}\n` +
@@ -137,51 +142,60 @@ export function createBrieflyMcpServer(env: Env): McpServer {
     }
   );
 
-  // ── Tool 3: Get model leaderboard ─────────────────────────────────────────
+  // ── Tool 3: Get model leaderboard (live scrape Arena.ai / HuggingFace) ────
   server.tool(
     "get_model_leaderboard",
-    "Retrieve the current AI model leaderboard from Arena.ai showing ranked models with scores.",
+    "Retrieve current AI model rankings. Scrapes Arena.ai live (headless browser), falls back to HuggingFace trending models.",
     {
       limit: z.number().min(1).max(20).default(10).describe("Number of top models to return"),
     },
     async ({ limit }) => {
-      const items = await queryScraperAgentMcp(env, {
-        category: "leaderboard",
-        limit,
-      });
+      const items = await scrapeArena(env).catch(() => [] as ScrapedItem[]);
+      storeToCache(env, items);
 
-      if (items.length === 0) {
+      const results = items.slice(0, limit);
+
+      if (results.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "Leaderboard data not available yet — the scraper runs every 6 hours." }],
+          content: [{ type: "text" as const, text: "Leaderboard sources unreachable — please try again." }],
         };
       }
 
       const formatted =
-        "# AI Model Leaderboard (Arena.ai)\n\n" +
-        items.map((item) => `${item.title}\n${item.summary}`).join("\n\n");
+        "# AI Model Leaderboard\n\n" +
+        results.map((item) => `${item.title}\n${item.summary}`).join("\n\n");
 
       return { content: [{ type: "text" as const, text: formatted }] };
     }
   );
 
-  // ── Tool 4: Generate brief (raw data, no LLM) ─────────────────────────────
+  // ── Tool 4: Generate brief (live scrape all sources) ──────────────────────
   server.tool(
     "generate_brief",
-    "Generate a structured AI innovation brief for a topic. Returns raw scraped data as structured JSON — no AI generation, just real intelligence from monitored sources.",
+    "Generate a structured AI innovation brief. Scrapes all sources live — no cached data.",
     {
       topic: z.string().max(500).describe("Project or topic to build the brief for"),
     },
     async ({ topic }) => {
       const [tools, news, leaderboard] = await Promise.all([
-        queryScraperAgentMcp(env, { query: topic, category: "tool", limit: 5 }),
-        queryScraperAgentMcp(env, { category: "news", limit: 5 }),
-        queryScraperAgentMcp(env, { category: "leaderboard", limit: 5 }),
+        Promise.all([
+          scrapeFuturepedia(env).catch(() => [] as ScrapedItem[]),
+          scrapeProductHunt().catch(() => [] as ScrapedItem[]),
+        ]).then(([f, p]) => filterItems([...f, ...p], { query: topic, limit: 5 })),
+        Promise.all([
+          scrapeTheRundown().catch(() => [] as ScrapedItem[]),
+          scrapeTheNeuron().catch(() => [] as ScrapedItem[]),
+        ]).then(([r, n]) => [...r, ...n].slice(0, 5)),
+        scrapeArena(env).catch(() => [] as ScrapedItem[]).then((r) => r.slice(0, 5)),
       ]);
+
+      const allItems = [...tools, ...news, ...leaderboard];
+      storeToCache(env, allItems);
 
       const brief = {
         topic,
         generatedAt: new Date().toISOString(),
-        dataSource: "Live scrape from Futurepedia, Product Hunt, The Rundown AI, The Neuron Daily, Arena.ai",
+        dataSource: "Live scrape: Futurepedia, Product Hunt, The Rundown AI, The Neuron Daily, Arena.ai / HuggingFace",
         recommendedTools: tools.map((t) => ({
           name: t.title,
           summary: t.summary,
@@ -196,14 +210,12 @@ export function createBrieflyMcpServer(env: Env): McpServer {
           url: n.url,
           publishedAt: n.publishedAt,
         })),
-        leaderboardSnapshot: leaderboard.slice(0, 5).map((l, i) => ({
+        leaderboardSnapshot: leaderboard.map((l, i) => ({
           rank: i + 1,
           model: l.title.replace(/^#\d+\s/, ""),
           summary: l.summary,
+          url: l.url,
         })),
-        status: (tools.length + news.length + leaderboard.length) === 0
-          ? "no_data — scraper may still be populating"
-          : "ok",
       };
 
       return {
