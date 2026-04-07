@@ -1,0 +1,63 @@
+{
+  "_index-BX2Xy5TN.js": {
+    "file": "assets/index-BX2Xy5TN.js",
+    "name": "index",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-Cvc83e9v.js"
+    ]
+  },
+  "_worker-entry-Cvc83e9v.js": {
+    "file": "assets/worker-entry-Cvc83e9v.js",
+    "name": "worker-entry",
+    "dynamicImports": [
+      "node_modules/mimetext/dist/mimetext.node.es.js",
+      "_index-BX2Xy5TN.js",
+      "node_modules/unenv/dist/runtime/node/fs/promises.mjs",
+      "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/node/NodeWebSocketTransport.js",
+      "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/common/BrowserWebSocketTransport.js"
+    ]
+  },
+  "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/common/BrowserWebSocketTransport.js": {
+    "file": "assets/BrowserWebSocketTransport-_4zER8KH.js",
+    "name": "BrowserWebSocketTransport",
+    "src": "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/common/BrowserWebSocketTransport.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/node/NodeWebSocketTransport.js": {
+    "file": "assets/NodeWebSocketTransport-CVgrw-Su.js",
+    "name": "NodeWebSocketTransport",
+    "src": "node_modules/@cloudflare/puppeteer/lib/esm/puppeteer/node/NodeWebSocketTransport.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-Cvc83e9v.js"
+    ]
+  },
+  "node_modules/mimetext/dist/mimetext.node.es.js": {
+    "file": "assets/mimetext.node.es-DvMn12TY.js",
+    "name": "mimetext.node.es",
+    "src": "node_modules/mimetext/dist/mimetext.node.es.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-Cvc83e9v.js"
+    ]
+  },
+  "node_modules/unenv/dist/runtime/node/fs/promises.mjs": {
+    "file": "assets/promises-C0oyVrP-.js",
+    "name": "promises",
+    "src": "node_modules/unenv/dist/runtime/node/fs/promises.mjs",
+    "isDynamicEntry": true,
+    "imports": [
+      "_worker-entry-Cvc83e9v.js"
+    ]
+  },
+  "virtual:cloudflare/worker-entry": {
+    "file": "index.js",
+    "name": "index",
+    "src": "virtual:cloudflare/worker-entry",
+    "isEntry": true,
+    "imports": [
+      "_worker-entry-Cvc83e9v.js"
+    ]
+  }
+}
