@@ -1,5 +1,5 @@
 import require$$1 from "path";
-import { c as commonjsGlobal, g as getDefaultExportFromCjs } from "./worker-entry-DAY2Ov7z.js";
+import { c as commonjsGlobal, g as getDefaultExportFromCjs } from "./worker-entry-CMPJ8Nxq.js";
 import "node:events";
 import "node:stream";
 import "node:async_hooks";

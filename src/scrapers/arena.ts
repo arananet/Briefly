@@ -35,15 +35,47 @@ function isValidEntry(e: LeaderboardEntry): boolean {
   return e.model.length >= 4 && /[a-zA-Z]/.test(e.model) && !/^\d+$/.test(e.model);
 }
 
-// ── 1. CrawlerAgent headless render ────────────────────────────────────────
+// ── 1. CrawlerAgent — extract __NEXT_DATA__ directly via JS evaluation ──────
+//
+// Using evaluatePage to read window.__NEXT_DATA__ is far more reliable than
+// parsing rendered HTML tables — avoids column-order ambiguity entirely.
 
-async function crawlArena(env: Env): Promise<string | null> {
+async function crawlArenaData(env: Env): Promise<LeaderboardEntry[] | null> {
+  try {
+    const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
+
+    // evaluatePage returns JSON.stringify of the expression result
+    const raw = await callAgent<string>(stub, "/call/evaluatePage", {
+      url: ARENA_URL,
+      expression: "window.__NEXT_DATA__ || null",
+      waitFor: "networkidle",
+      timeout: 30_000,
+    });
+    if (!raw) return null;
+
+    // raw is JSON.stringify(window.__NEXT_DATA__) — parse it to get the object
+    const nextData = JSON.parse(raw);
+    if (!nextData) return null;
+
+    const entries = findLeaderboard(nextData);
+    if (entries && entries.length > 0) {
+      return entries.filter(isValidEntry);
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fallback: render full HTML and parse it (less reliable, kept as safety net). */
+async function crawlArenaHtml(env: Env): Promise<string | null> {
   try {
     const stub = env.CRAWLER_AGENT.get(env.CRAWLER_AGENT.idFromName("global"));
     return await callAgent<string>(stub, "/call/renderPage", {
       url: ARENA_URL,
-      waitFor: "table, [class*='leaderboard'], [class*='ranking']",
-      timeout: 25_000,
+      waitFor: "networkidle",
+      timeout: 30_000,
     });
   } catch {
     return null;
@@ -183,30 +215,19 @@ async function scrapeHuggingFace(): Promise<LeaderboardEntry[]> {
 export async function scrapeArena(env: Env): Promise<ScrapedItem[]> {
   let entries: LeaderboardEntry[] = [];
 
-  // 1. CrawlerAgent headless render of Arena.ai
-  const crawledHtml = await crawlArena(env);
-  if (crawledHtml) {
-    entries = parseNextData(crawledHtml);
-    if (entries.length === 0) entries = parseTableHtml(crawledHtml);
-    // Reject bot-protection garbage: model names must look real
-    entries = entries.filter(isValidEntry);
-  }
+  // 1. CrawlerAgent: extract __NEXT_DATA__ directly via JS (most reliable)
+  entries = (await crawlArenaData(env)) ?? [];
 
-  // 2. Plain fetch Arena.ai (may be blocked by CF bot protection on Worker IPs)
+  // 2. CrawlerAgent: fall back to full HTML render + parse
   if (entries.length === 0) {
-    try {
-      const res = await fetch(ARENA_URL, { headers: getBrowserHeaders(ARENA_URL), redirect: "follow" });
-      if (res.ok) {
-        const html = await res.text();
-        const parsed = parseNextData(html);
-        entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
-      }
-    } catch {
-      // ignore
+    const html = await crawlArenaHtml(env);
+    if (html) {
+      const parsed = parseNextData(html);
+      entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
     }
   }
 
-  // 3. HuggingFace trending models — always reliable JSON source
+  // 3. HuggingFace trending models — always reliable, no JS rendering needed
   if (entries.length === 0) {
     entries = await scrapeHuggingFace();
   }

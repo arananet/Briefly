@@ -1,4 +1,4 @@
-import { g as getDefaultExportFromCjs, p as packageVersion } from "./worker-entry-DAY2Ov7z.js";
+import { g as getDefaultExportFromCjs, p as packageVersion } from "./worker-entry-CMPJ8Nxq.js";
 import "node:events";
 import "node:stream";
 import "node:async_hooks";

@@ -28478,7 +28478,7 @@ var Agent = class Agent2 extends Server$1 {
       if (email2._secureRouted && options.secret === void 0) throw new Error("This email was routed via createSecureReplyEmailResolver. You must pass a secret to replyToEmail() to sign replies, or pass explicit null to opt-out (not recommended).");
       const agentName = camelCaseToKebabCase$1(this._ParentClass.name);
       const agentId = this.name;
-      const { createMimeMessage } = await import("./mimetext.node.es-BMWiIu_A.js");
+      const { createMimeMessage } = await import("./mimetext.node.es-CQSVCO8C.js");
       const msg = createMimeMessage();
       msg.setSender({
         addr: email2.to,
@@ -33008,13 +33008,34 @@ const HF_API = "https://huggingface.co/api/models?sort=trendingScore&direction=-
 function isValidEntry(e) {
   return e.model.length >= 4 && /[a-zA-Z]/.test(e.model) && !/^\d+$/.test(e.model);
 }
-async function crawlArena(env2) {
+async function crawlArenaData(env2) {
+  try {
+    const stub = env2.CRAWLER_AGENT.get(env2.CRAWLER_AGENT.idFromName("global"));
+    const raw = await callAgent(stub, "/call/evaluatePage", {
+      url: ARENA_URL,
+      expression: "window.__NEXT_DATA__ || null",
+      waitFor: "networkidle",
+      timeout: 3e4
+    });
+    if (!raw) return null;
+    const nextData = JSON.parse(raw);
+    if (!nextData) return null;
+    const entries = findLeaderboard(nextData);
+    if (entries && entries.length > 0) {
+      return entries.filter(isValidEntry);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+async function crawlArenaHtml(env2) {
   try {
     const stub = env2.CRAWLER_AGENT.get(env2.CRAWLER_AGENT.idFromName("global"));
     return await callAgent(stub, "/call/renderPage", {
       url: ARENA_URL,
-      waitFor: "table, [class*='leaderboard'], [class*='ranking']",
-      timeout: 25e3
+      waitFor: "networkidle",
+      timeout: 3e4
     });
   } catch {
     return null;
@@ -33111,21 +33132,12 @@ async function scrapeHuggingFace() {
 }
 async function scrapeArena(env2) {
   let entries = [];
-  const crawledHtml = await crawlArena(env2);
-  if (crawledHtml) {
-    entries = parseNextData(crawledHtml);
-    if (entries.length === 0) entries = parseTableHtml(crawledHtml);
-    entries = entries.filter(isValidEntry);
-  }
+  entries = await crawlArenaData(env2) ?? [];
   if (entries.length === 0) {
-    try {
-      const res = await fetch(ARENA_URL, { headers: getBrowserHeaders(ARENA_URL), redirect: "follow" });
-      if (res.ok) {
-        const html = await res.text();
-        const parsed = parseNextData(html);
-        entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
-      }
-    } catch {
+    const html = await crawlArenaHtml(env2);
+    if (html) {
+      const parsed = parseNextData(html);
+      entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
     }
   }
   if (entries.length === 0) {
@@ -35712,7 +35724,7 @@ const isNode = !!(typeof process !== "undefined" && process.version);
 let debugModule = null;
 async function importDebug() {
   if (!debugModule) {
-    debugModule = (await import("./index-wEsz3_8b.js").then((n) => n.i)).default;
+    debugModule = (await import("./index-D1IsdzI7.js").then((n) => n.i)).default;
   }
   return debugModule;
 }
@@ -35900,7 +35912,7 @@ let fs = null;
 async function importFSPromises() {
   if (!fs) {
     try {
-      fs = await import("./promises-R-lI9jac.js");
+      fs = await import("./promises-OcgvujMN.js");
     } catch (error) {
       if (error instanceof TypeError) {
         throw new Error("Cannot write to a path outside of a Node-like environment. fs");
@@ -50575,7 +50587,7 @@ async function _connectToCdpBrowser(connectionTransport, url2, options) {
  * SPDX-License-Identifier: Apache-2.0
  */
 const getWebSocketTransportClass = async () => {
-  return isNode ? (await import("./NodeWebSocketTransport-Dn9IwLBn.js")).NodeWebSocketTransport : (await import("./BrowserWebSocketTransport-_4zER8KH.js")).BrowserWebSocketTransport;
+  return isNode ? (await import("./NodeWebSocketTransport-BxQsw3sD.js")).NodeWebSocketTransport : (await import("./BrowserWebSocketTransport-_4zER8KH.js")).BrowserWebSocketTransport;
 };
 async function _connectToBrowser(options) {
   const { connectionTransport, endpointUrl } = await getConnectionTransport(options);
@@ -52543,6 +52555,19 @@ Object.freeze(knownDevicesByName);
  */
 const puppeteer = new PuppeteerWorkers();
 const { connect, history, launch, limits, sessions, acquire } = puppeteer;
+const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+const SEC_HEADERS = {
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Sec-Ch-Ua": '"Google Chrome";v="135", "Chromium";v="135", "Not?A_Brand";v="99"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"macOS"',
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+  "Upgrade-Insecure-Requests": "1"
+};
 class CrawlerAgent extends (_c = Agent, _renderPage_dec = [callable()], _evaluatePage_dec = [callable()], _c) {
   constructor() {
     super(...arguments);
@@ -52550,35 +52575,36 @@ class CrawlerAgent extends (_c = Agent, _renderPage_dec = [callable()], _evaluat
     __publicField(this, "initialState", { pagesRendered: 0 });
     __publicField(this, "_browser", null);
   }
-  /** Returns the shared browser, launching it if needed. */
   async getBrowser() {
-    if (this._browser && this._browser.isConnected()) {
-      return this._browser;
-    }
+    if (this._browser && this._browser.isConnected()) return this._browser;
     this._browser = await puppeteer.launch(this.env.BROWSER);
     return this._browser;
   }
+  /** Apply stealth settings to a fresh page before navigation. */
+  async preparePage(page) {
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => void 0 });
+      window.chrome = {
+        runtime: {},
+        loadTimes: () => ({}),
+        csi: () => ({})
+      };
+    });
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+    await page.setUserAgent(USER_AGENT);
+    await page.setExtraHTTPHeaders(SEC_HEADERS);
+  }
   async renderPage(opts) {
-    const { url: url2, waitFor, timeout: timeout2 = 25e3 } = opts;
+    const { url: url2, waitFor, timeout: timeout2 = 28e3 } = opts;
     const browser = await this.getBrowser();
     const page = await browser.newPage();
     try {
-      await page.setUserAgent(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-      );
-      await page.setExtraHTTPHeaders({
-        "Accept-Language": "en-US,en;q=0.9",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-      });
-      await page.goto(url2, {
-        waitUntil: waitFor === "networkidle" ? "networkidle0" : "domcontentloaded",
-        timeout: timeout2
-      });
+      await this.preparePage(page);
+      const waitUntil = waitFor === "networkidle" ? "networkidle0" : "networkidle2";
+      await page.goto(url2, { waitUntil, timeout: timeout2 });
       if (waitFor && waitFor !== "networkidle") {
-        try {
-          await page.waitForSelector(waitFor, { timeout: 8e3 });
-        } catch {
-        }
+        await page.waitForSelector(waitFor, { timeout: 8e3 }).catch(() => {
+        });
       }
       const html = await page.content();
       this.setState({ pagesRendered: this.state.pagesRendered + 1 });
@@ -52588,30 +52614,24 @@ class CrawlerAgent extends (_c = Agent, _renderPage_dec = [callable()], _evaluat
     }
   }
   async evaluatePage(opts) {
-    const { url: url2, expression, waitFor, timeout: timeout2 = 25e3 } = opts;
+    const { url: url2, expression, waitFor, timeout: timeout2 = 28e3 } = opts;
     const browser = await this.getBrowser();
     const page = await browser.newPage();
     try {
-      await page.setUserAgent(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-      );
-      await page.goto(url2, {
-        waitUntil: waitFor === "networkidle" ? "networkidle0" : "domcontentloaded",
-        timeout: timeout2
-      });
+      await this.preparePage(page);
+      const waitUntil = waitFor === "networkidle" ? "networkidle0" : "networkidle2";
+      await page.goto(url2, { waitUntil, timeout: timeout2 });
       if (waitFor && waitFor !== "networkidle") {
-        try {
-          await page.waitForSelector(waitFor, { timeout: 8e3 });
-        } catch {
-        }
+        await page.waitForSelector(waitFor, { timeout: 8e3 }).catch(() => {
+        });
       }
       const result = await page.evaluate(expression);
+      this.setState({ pagesRendered: this.state.pagesRendered + 1 });
       return JSON.stringify(result);
     } finally {
       await page.close();
     }
   }
-  /** Close the browser and release the session. */
   async onDestroy() {
     if (this._browser) {
       await this._browser.close().catch(() => {
