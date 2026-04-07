@@ -1,13 +1,11 @@
 /**
  * AI Model Leaderboard scraper.
  *
- * Fallback chain (most reliable first):
- *   1. CrawlerAgent headless render of Arena.ai (requires BROWSER binding)
- *   2. Plain fetch Arena.ai + __NEXT_DATA__ parse (works if SSR is present)
- *   3. HuggingFace Trending Models API — pure JSON, no JS, always accessible
+ * Tries Arena.ai first (headless Chromium via CrawlerAgent, then plain fetch).
+ * Falls back to HuggingFace trending models API — pure JSON, always accessible.
  *
- * The HuggingFace fallback guarantees leaderboard data is always available,
- * even before the CrawlerAgent is deployed or when Arena.ai blocks CF IPs.
+ * Validation: Arena.ai data is only accepted when model names look real
+ * (not bare numbers from a bot-protection challenge page).
  */
 
 import type { Env, ScrapedItem } from "../types";
@@ -17,9 +15,9 @@ import { createItemId } from "./index";
 
 const ARENA_URL = "https://arena.ai/leaderboard/text";
 
-// HuggingFace models API — returns JSON without auth, always accessible
-const HF_MODELS_API =
-  "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&filter=text-generation";
+// HuggingFace models API — no auth, always returns JSON
+const HF_API =
+  "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&pipeline_tag=text-generation";
 
 interface LeaderboardEntry {
   rank: number;
@@ -27,6 +25,14 @@ interface LeaderboardEntry {
   provider: string;
   score: string;
   url: string;
+  fromHF?: boolean;
+}
+
+// ── Validation ─────────────────────────────────────────────────────────────
+
+/** A valid model name has letters, is at least 4 chars, is not just a number. */
+function isValidEntry(e: LeaderboardEntry): boolean {
+  return e.model.length >= 4 && /[a-zA-Z]/.test(e.model) && !/^\d+$/.test(e.model);
 }
 
 // ── 1. CrawlerAgent headless render ────────────────────────────────────────
@@ -44,14 +50,13 @@ async function crawlArena(env: Env): Promise<string | null> {
   }
 }
 
-// ── 2. Arena.ai plain fetch + HTML parsing ─────────────────────────────────
+// ── 2. Arena.ai HTML parsing ───────────────────────────────────────────────
 
 function parseNextData(html: string): LeaderboardEntry[] {
   const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
   if (!m) return [];
   try {
-    const data = JSON.parse(m[1]);
-    return findLeaderboard(data) ?? [];
+    return findLeaderboard(JSON.parse(m[1])) ?? [];
   } catch {
     return [];
   }
@@ -68,7 +73,7 @@ function parseTableHtml(html: string): LeaderboardEntry[] {
     if (cells.length < 2) continue;
     const modelCell = cells[0] ?? "";
     const scoreCell = cells[cells.length - 1] ?? "";
-    if (!modelCell || modelCell.toLowerCase().includes("model")) continue;
+    if (!modelCell || modelCell.toLowerCase() === "model" || modelCell.toLowerCase() === "name") continue;
 
     const [provider, ...parts] = modelCell.includes("/")
       ? modelCell.split("/")
@@ -121,51 +126,53 @@ function findLeaderboard(obj: unknown): LeaderboardEntry[] | null {
   return null;
 }
 
-// ── 3. HuggingFace Trending Models API ────────────────────────────────────
-// Returns pure JSON without any JS rendering. Ranks models by trending score.
+// ── 3. HuggingFace Trending Models — reliable JSON fallback ────────────────
 
 interface HFModel {
   id?: string;
   modelId?: string;
-  downloads?: number;
   likes?: number;
+  downloads?: number;
   trendingScore?: number;
-  pipeline_tag?: string;
-  lastModified?: string;
 }
 
-async function scrapeHuggingFaceTrending(): Promise<LeaderboardEntry[]> {
+async function scrapeHuggingFace(): Promise<LeaderboardEntry[]> {
   try {
-    const res = await fetch(HF_MODELS_API, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; Briefly/1.0)",
-      },
+    const res = await fetch(HF_API, {
+      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; Briefly/1.0)" },
     });
-
     if (!res.ok) return [];
 
     const models = await res.json() as HFModel[];
     if (!Array.isArray(models) || models.length === 0) return [];
 
-    return models.slice(0, 20).map((m, i) => {
-      const id = m.modelId || m.id || `model-${i}`;
-      const [provider, ...rest] = id.includes("/") ? id.split("/") : ["Community", id];
-      const modelName = rest.join("/") || id;
-      const score = m.trendingScore != null
-        ? m.trendingScore.toFixed(1)
-        : m.downloads != null
-        ? `${(m.downloads / 1000).toFixed(0)}k dl`
-        : "N/A";
+    return models
+      .map((m, i) => {
+        const rawId = (m.modelId || m.id || "").toString();
+        if (!rawId || /^\d+$/.test(rawId)) return null; // skip numeric-only IDs
 
-      return {
-        rank: i + 1,
-        model: modelName,
-        provider,
-        score,
-        url: `https://huggingface.co/${id}`,
-      };
-    });
+        const slashIdx = rawId.indexOf("/");
+        const provider = slashIdx > 0 ? rawId.slice(0, slashIdx) : "Community";
+        const modelName = slashIdx > 0 ? rawId.slice(slashIdx + 1) : rawId;
+
+        // Format score: prefer trendingScore, fall back to likes
+        const score =
+          typeof m.trendingScore === "number" && m.trendingScore > 0
+            ? m.trendingScore.toFixed(1)
+            : typeof m.likes === "number"
+            ? `${m.likes.toLocaleString()} ♥`
+            : "N/A";
+
+        return {
+          rank: i + 1,
+          model: modelName,
+          provider,
+          score,
+          url: `https://huggingface.co/${rawId}`,
+          fromHF: true,
+        } as LeaderboardEntry;
+      })
+      .filter((e): e is LeaderboardEntry => e !== null && isValidEntry(e));
   } catch {
     return [];
   }
@@ -176,51 +183,50 @@ async function scrapeHuggingFaceTrending(): Promise<LeaderboardEntry[]> {
 export async function scrapeArena(env: Env): Promise<ScrapedItem[]> {
   let entries: LeaderboardEntry[] = [];
 
-  // 1. Try CrawlerAgent headless render
-  const html = await crawlArena(env);
-  if (html) {
-    entries = parseNextData(html);
-    if (entries.length === 0) entries = parseTableHtml(html);
+  // 1. CrawlerAgent headless render of Arena.ai
+  const crawledHtml = await crawlArena(env);
+  if (crawledHtml) {
+    entries = parseNextData(crawledHtml);
+    if (entries.length === 0) entries = parseTableHtml(crawledHtml);
+    // Reject bot-protection garbage: model names must look real
+    entries = entries.filter(isValidEntry);
   }
 
-  // 2. Plain fetch Arena.ai (may work if SSR, often blocked on CF IPs)
+  // 2. Plain fetch Arena.ai (may be blocked by CF bot protection on Worker IPs)
   if (entries.length === 0) {
     try {
-      const res = await fetch(ARENA_URL, {
-        headers: getBrowserHeaders(ARENA_URL),
-        redirect: "follow",
-      });
+      const res = await fetch(ARENA_URL, { headers: getBrowserHeaders(ARENA_URL), redirect: "follow" });
       if (res.ok) {
-        const fetchedHtml = await res.text();
-        entries = parseNextData(fetchedHtml);
-        if (entries.length === 0) entries = parseTableHtml(fetchedHtml);
+        const html = await res.text();
+        const parsed = parseNextData(html);
+        entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
       }
     } catch {
       // ignore
     }
   }
 
-  // 3. Reliable fallback: HuggingFace trending models (always accessible JSON)
+  // 3. HuggingFace trending models — always reliable JSON source
   if (entries.length === 0) {
-    entries = await scrapeHuggingFaceTrending();
+    entries = await scrapeHuggingFace();
   }
 
   if (entries.length === 0) return [];
 
-  const now = new Date().toISOString();
-  const source = entries[0]?.url?.includes("huggingface")
-    ? "Trending on HuggingFace"
-    : "Arena.ai";
+  const fromHF = entries[0]?.fromHF === true;
+  const sourceLabel = fromHF ? "HuggingFace Trending" : "Arena.ai";
+  const sourceUrl = fromHF ? "https://huggingface.co" : ARENA_URL;
 
+  const now = new Date().toISOString();
   return entries.slice(0, 20).map((e) => ({
-    id: createItemId("arena", `rank-${e.rank}-${e.model}`),
+    id: createItemId("arena", e.fromHF ? `hf-${e.model}` : `arena-${e.rank}-${e.model}`),
     source: "arena" as const,
-    sourceUrl: e.url?.includes("huggingface") ? "https://huggingface.co" : ARENA_URL,
-    title: `#${e.rank} ${e.model}`,
-    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on ${source}`,
+    sourceUrl,
+    title: `#${e.rank} ${e.provider}/${e.model}`,
+    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on ${sourceLabel}`,
     url: e.url,
     category: "leaderboard" as const,
-    tags: [e.provider, "AI Model", "Leaderboard"],
+    tags: [e.provider, "AI Model", "Leaderboard", sourceLabel],
     publishedAt: now,
     scrapedAt: now,
   }));

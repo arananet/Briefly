@@ -1,4 +1,4 @@
-import { W as WriteStream, R as ReadStream, a as getAugmentedNamespace, g as getDefaultExportFromCjs } from "./worker-entry-Cvc83e9v.js";
+import { W as WriteStream, R as ReadStream, a as getAugmentedNamespace, g as getDefaultExportFromCjs } from "./worker-entry-DAY2Ov7z.js";
 import require$$1 from "util";
 function _mergeNamespaces(n, m) {
   for (var i = 0; i < m.length; i++) {

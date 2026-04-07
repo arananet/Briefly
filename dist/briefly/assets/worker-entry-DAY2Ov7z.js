@@ -28478,7 +28478,7 @@ var Agent = class Agent2 extends Server$1 {
       if (email2._secureRouted && options.secret === void 0) throw new Error("This email was routed via createSecureReplyEmailResolver. You must pass a secret to replyToEmail() to sign replies, or pass explicit null to opt-out (not recommended).");
       const agentName = camelCaseToKebabCase$1(this._ParentClass.name);
       const agentId = this.name;
-      const { createMimeMessage } = await import("./mimetext.node.es-DvMn12TY.js");
+      const { createMimeMessage } = await import("./mimetext.node.es-BMWiIu_A.js");
       const msg = createMimeMessage();
       msg.setSender({
         addr: email2.to,
@@ -33004,7 +33004,10 @@ function filterItems(items2, opts) {
   return filtered.slice(0, opts.limit ?? 20);
 }
 const ARENA_URL = "https://arena.ai/leaderboard/text";
-const HF_MODELS_API = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&filter=text-generation";
+const HF_API = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&pipeline_tag=text-generation";
+function isValidEntry(e) {
+  return e.model.length >= 4 && /[a-zA-Z]/.test(e.model) && !/^\d+$/.test(e.model);
+}
 async function crawlArena(env2) {
   try {
     const stub = env2.CRAWLER_AGENT.get(env2.CRAWLER_AGENT.idFromName("global"));
@@ -33021,8 +33024,7 @@ function parseNextData(html) {
   const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
   if (!m) return [];
   try {
-    const data = JSON.parse(m[1]);
-    return findLeaderboard(data) ?? [];
+    return findLeaderboard(JSON.parse(m[1])) ?? [];
   } catch {
     return [];
   }
@@ -33037,7 +33039,7 @@ function parseTableHtml(html) {
     if (cells.length < 2) continue;
     const modelCell = cells[0] ?? "";
     const scoreCell = cells[cells.length - 1] ?? "";
-    if (!modelCell || modelCell.toLowerCase().includes("model")) continue;
+    if (!modelCell || modelCell.toLowerCase() === "model" || modelCell.toLowerCase() === "name") continue;
     const [provider, ...parts] = modelCell.includes("/") ? modelCell.split("/") : ["Unknown", modelCell];
     entries.push({
       rank,
@@ -33079,70 +33081,70 @@ function findLeaderboard(obj) {
   }
   return null;
 }
-async function scrapeHuggingFaceTrending() {
+async function scrapeHuggingFace() {
   try {
-    const res = await fetch(HF_MODELS_API, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; Briefly/1.0)"
-      }
+    const res = await fetch(HF_API, {
+      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; Briefly/1.0)" }
     });
     if (!res.ok) return [];
     const models = await res.json();
     if (!Array.isArray(models) || models.length === 0) return [];
-    return models.slice(0, 20).map((m, i) => {
-      const id2 = m.modelId || m.id || `model-${i}`;
-      const [provider, ...rest] = id2.includes("/") ? id2.split("/") : ["Community", id2];
-      const modelName = rest.join("/") || id2;
-      const score = m.trendingScore != null ? m.trendingScore.toFixed(1) : m.downloads != null ? `${(m.downloads / 1e3).toFixed(0)}k dl` : "N/A";
+    return models.map((m, i) => {
+      const rawId = (m.modelId || m.id || "").toString();
+      if (!rawId || /^\d+$/.test(rawId)) return null;
+      const slashIdx = rawId.indexOf("/");
+      const provider = slashIdx > 0 ? rawId.slice(0, slashIdx) : "Community";
+      const modelName = slashIdx > 0 ? rawId.slice(slashIdx + 1) : rawId;
+      const score = typeof m.trendingScore === "number" && m.trendingScore > 0 ? m.trendingScore.toFixed(1) : typeof m.likes === "number" ? `${m.likes.toLocaleString()} ♥` : "N/A";
       return {
         rank: i + 1,
         model: modelName,
         provider,
         score,
-        url: `https://huggingface.co/${id2}`
+        url: `https://huggingface.co/${rawId}`,
+        fromHF: true
       };
-    });
+    }).filter((e) => e !== null && isValidEntry(e));
   } catch {
     return [];
   }
 }
 async function scrapeArena(env2) {
   let entries = [];
-  const html = await crawlArena(env2);
-  if (html) {
-    entries = parseNextData(html);
-    if (entries.length === 0) entries = parseTableHtml(html);
+  const crawledHtml = await crawlArena(env2);
+  if (crawledHtml) {
+    entries = parseNextData(crawledHtml);
+    if (entries.length === 0) entries = parseTableHtml(crawledHtml);
+    entries = entries.filter(isValidEntry);
   }
   if (entries.length === 0) {
     try {
-      const res = await fetch(ARENA_URL, {
-        headers: getBrowserHeaders(ARENA_URL),
-        redirect: "follow"
-      });
+      const res = await fetch(ARENA_URL, { headers: getBrowserHeaders(ARENA_URL), redirect: "follow" });
       if (res.ok) {
-        const fetchedHtml = await res.text();
-        entries = parseNextData(fetchedHtml);
-        if (entries.length === 0) entries = parseTableHtml(fetchedHtml);
+        const html = await res.text();
+        const parsed = parseNextData(html);
+        entries = (parsed.length > 0 ? parsed : parseTableHtml(html)).filter(isValidEntry);
       }
     } catch {
     }
   }
   if (entries.length === 0) {
-    entries = await scrapeHuggingFaceTrending();
+    entries = await scrapeHuggingFace();
   }
   if (entries.length === 0) return [];
+  const fromHF = entries[0]?.fromHF === true;
+  const sourceLabel = fromHF ? "HuggingFace Trending" : "Arena.ai";
+  const sourceUrl = fromHF ? "https://huggingface.co" : ARENA_URL;
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  const source2 = entries[0]?.url?.includes("huggingface") ? "Trending on HuggingFace" : "Arena.ai";
   return entries.slice(0, 20).map((e) => ({
-    id: createItemId("arena", `rank-${e.rank}-${e.model}`),
+    id: createItemId("arena", e.fromHF ? `hf-${e.model}` : `arena-${e.rank}-${e.model}`),
     source: "arena",
-    sourceUrl: e.url?.includes("huggingface") ? "https://huggingface.co" : ARENA_URL,
-    title: `#${e.rank} ${e.model}`,
-    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on ${source2}`,
+    sourceUrl,
+    title: `#${e.rank} ${e.provider}/${e.model}`,
+    summary: `${e.provider} · Score: ${e.score} · Rank #${e.rank} on ${sourceLabel}`,
     url: e.url,
     category: "leaderboard",
-    tags: [e.provider, "AI Model", "Leaderboard"],
+    tags: [e.provider, "AI Model", "Leaderboard", sourceLabel],
     publishedAt: now,
     scrapedAt: now
   }));
@@ -35710,7 +35712,7 @@ const isNode = !!(typeof process !== "undefined" && process.version);
 let debugModule = null;
 async function importDebug() {
   if (!debugModule) {
-    debugModule = (await import("./index-BX2Xy5TN.js").then((n) => n.i)).default;
+    debugModule = (await import("./index-wEsz3_8b.js").then((n) => n.i)).default;
   }
   return debugModule;
 }
@@ -35898,7 +35900,7 @@ let fs = null;
 async function importFSPromises() {
   if (!fs) {
     try {
-      fs = await import("./promises-C0oyVrP-.js");
+      fs = await import("./promises-R-lI9jac.js");
     } catch (error) {
       if (error instanceof TypeError) {
         throw new Error("Cannot write to a path outside of a Node-like environment. fs");
@@ -50573,7 +50575,7 @@ async function _connectToCdpBrowser(connectionTransport, url2, options) {
  * SPDX-License-Identifier: Apache-2.0
  */
 const getWebSocketTransportClass = async () => {
-  return isNode ? (await import("./NodeWebSocketTransport-CVgrw-Su.js")).NodeWebSocketTransport : (await import("./BrowserWebSocketTransport-_4zER8KH.js")).BrowserWebSocketTransport;
+  return isNode ? (await import("./NodeWebSocketTransport-Dn9IwLBn.js")).NodeWebSocketTransport : (await import("./BrowserWebSocketTransport-_4zER8KH.js")).BrowserWebSocketTransport;
 };
 async function _connectToBrowser(options) {
   const { connectionTransport, endpointUrl } = await getConnectionTransport(options);
